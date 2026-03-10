@@ -40,6 +40,7 @@ const EXTENDED_PATH = [
   "/usr/local/bin",
   "/opt/homebrew/bin",
   "/opt/homebrew/sbin",
+  path.join(os.homedir(), ".local/bin"),        // Claude CLI 默认安装路径
   path.join(os.homedir(), ".npm-global/bin"),
   path.join(os.homedir(), ".nvm/versions/node/*/bin"),
   process.env["PATH"] ?? "",
@@ -455,7 +456,7 @@ function registerPtyHandlers(): void {
       cwd: req.cwd,
       cols: req.cols,
       rows: req.rows,
-      env: req.env ? { ...process.env, ...req.env } : process.env,
+      env: req.env ? { ...process.env, PATH: EXTENDED_PATH, ...req.env } : { ...process.env, PATH: EXTENDED_PATH },
     })
 
     console.log(`[PTY] Session spawned: ${req.sessionId} cwd=${req.cwd}`)
