@@ -484,7 +484,8 @@ export default function App() {
             const curIdx    = snapshot ? ROLE_SEQUENCE.indexOf(snapshot.currentRole) : -1
             const roleIdx   = ROLE_SEQUENCE.indexOf(role)
             const isDone    = curIdx > roleIdx
-            const canSwitch = started && !isCur && role !== "done" && role !== "failed"
+            // 允许当前角色和其他角色都显示"开始"按钮
+            const canSwitch = started && role !== "done" && role !== "failed"
             const isPending = pendingRole === role
 
             return (
