@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* Catppuccin Mocha 色系自定义变量 */
+@theme {
+  --color-crust:   #11111b;
+  --color-mantle:  #181825;
+  --color-base:    #1e1e2e;
+  --color-surface0:#313244;
+  --color-surface1:#45475a;
+  --color-overlay0:#6c7086;
+  --color-text:    #cdd6f4;
+  --color-subtext: #a6adc8;
+  --color-lavender:#b4befe;
+  --color-mauve:   #cba6f7;
+  --color-green:   #a6e3a1;
+  --color-yellow:  #f9e2af;
+  --color-red:     #f38ba8;
+}
+
+/* 安装进度旋转动画 */
+@keyframes spin   { to { transform: rotate(360deg); } }
+@keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+
+/* xterm.js 终端容器：撑满父元素 */
+.xterm {
+  height: 100%;
+}
+.xterm-viewport {
+  overflow-y: auto !important;
+}
+.xterm-screen {
+  width: 100% !important;
+}
