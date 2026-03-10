@@ -101,7 +101,6 @@ const ALL_IN_ONE_MD = `
 
 8. 使用英文与codex/gemini协作，使用中文与用户交流。
 
-9. 生成代码时必须附带中文注释，不得事后补充。
 --------
 
 ## codex 工具调用规范
@@ -140,6 +139,41 @@ const ALL_IN_ONE_MD = `
   - **需求清晰化**：在任务开始阶段辅助生成引导性问题。
   - **任务规划**：生成 Step-by-step 的实施计划。
   - **前端原型**：编写 CSS、HTML、UI 组件代码，调整样式风格。
+
+--------
+
+## serena 工具调用规范
+
+1. 在决定调用serena任何工具前，**必须**检查，是否已经使用"mcp__serena__activate_project"工具完成项目激活。
+
+2. 善于使用serena提供的以下工具，帮助自己完成**"检索"**和**"定位"**任务。
+
+3. 严禁使用serena工具对代码文件进行修改。你被允许使用的serena工具如下，其他**未被提及的serena工具严禁使用**。
+
+   \`\`\`json
+   ["mcp__serena__activate_project",
+     "mcp__serena__check_onboarding_performed",
+     "mcp__serena__delete_memory",
+     "mcp__serena__find_referencing_code_snippets",
+     "mcp__serena__find_referencing_symbols",
+     "mcp__serena__find_symbol",
+     "mcp__serena__get_current_config",
+     "mcp__serena__get_symbols_overview",
+     "mcp__serena__list_dir",
+     "mcp__serena__list_memories",
+     "mcp__serena__onboarding",
+     "mcp__serena__prepare_for_new_conversation",
+     "mcp__serena__read_file",
+     "mcp__serena__read_memory",
+     "mcp__serena__search_for_pattern",
+     "mcp__serena__summarize_changes",
+     "mcp__serena__switch_modes",
+     "mcp__serena__think_about_collected_information",
+     "mcp__serena__think_about_task_adherence",
+     "mcp__serena__think_about_whether_you_are_done",
+     "mcp__serena__write_memory",
+     "mcp__serena__find_file"]
+   \`\`\`
 
 `.trim()
 
