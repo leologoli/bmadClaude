@@ -44,7 +44,7 @@ const EXTENDED_PATH = [
   path.join(os.homedir(), ".npm-global/bin"),
   path.join(os.homedir(), ".nvm/versions/node/*/bin"),
   process.env["PATH"] ?? "",
-].join(path.delimiter)
+].filter(Boolean).join(path.delimiter)
 
 // ============================================================
 // 多模型协作环境（Codex+Gemini MCP + CLAUDE.md）
@@ -452,14 +452,24 @@ function registerPtyHandlers(): void {
     }
     projectSessionMap.set(absPath, req.sessionId)
 
+    // 构建环境变量：确保 PATH 不被 req.env 覆盖
+    const baseEnv = { ...process.env, PATH: EXTENDED_PATH }
+    const finalEnv = req.env
+      ? {
+        ...baseEnv,
+        // Windows 环境变量键大小写不敏感，需移除所有 PATH 变体
+        ...Object.fromEntries(Object.entries(req.env).filter(([k]) => !/^path$/i.test(k))),
+      }
+      : baseEnv
+
     const session = ptyManager.spawn(req.sessionId, {
-      cwd: req.cwd,
+      cwd: absPath,  // 使用规范化的绝对路径
       cols: req.cols,
       rows: req.rows,
-      env: req.env ? { ...process.env, PATH: EXTENDED_PATH, ...req.env } : { ...process.env, PATH: EXTENDED_PATH },
+      env: finalEnv,
     })
 
-    console.log(`[PTY] Session spawned: ${req.sessionId} cwd=${req.cwd}`)
+    console.log(`[PTY] Session spawned: ${req.sessionId} cwd=${absPath}`)
 
     // PTY 输出 → 渲染进程（实时流）
     let firstData = true
