@@ -46,7 +46,7 @@ const EXTENDED_PATH = [
 ].join(path.delimiter)
 
 // ============================================================
-// HelpAI All-in-One 多模型环境（Codex+Gemini MCP + CLAUDE.md）
+// 多模型协作环境（Codex+Gemini MCP + CLAUDE.md）
 // 参考：https://www.helpaio.com/guides/all-in-one
 // ============================================================
 

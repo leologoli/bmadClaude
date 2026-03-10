@@ -126,7 +126,7 @@ export default function App() {
     setScreen("session")
   }
 
-  // ── 普通任务：跳过安装和工作流，直接启动 Claude ──
+  // ── 普通任务：跳过安装和工作流，直接启动 ──
   async function launchPlainSession(pPath: string) {
     const name = pPath.split("/").pop() || "任务"
     setProjectName(name)
@@ -1062,7 +1062,7 @@ function IntakeForm({
             />
             <div className="flex flex-col gap-0.5">
               <span className="text-sapphire text-sm font-medium group-hover:brightness-110 transition-all">
-                HelpAI All-in-One 多模型环境
+                多模型协作环境
               </span>
               <span className="text-overlay0 text-xs">
                 配置 Codex+Gemini MCP 服务与 Claude 协作（自动追加 CLAUDE.md 规范）
@@ -1108,7 +1108,7 @@ function PlainIntakeForm({ onBack, onStart }: PlainIntakeFormProps) {
           <button onClick={onBack} className="mt-0.5 text-overlay0 hover:text-text transition-colors shrink-0">←</button>
           <div>
             <h2 className="text-2xl font-bold text-text">普通任务</h2>
-            <p className="text-subtext text-sm mt-1">直接在指定目录启动 Claude，无 BMAD 工作流</p>
+            <p className="text-subtext text-sm mt-1">直接在指定目录启动，无 BMAD 工作流</p>
           </div>
         </div>
 
@@ -1168,7 +1168,7 @@ function PlainIntakeForm({ onBack, onStart }: PlainIntakeFormProps) {
               className="w-4 h-4 mt-0.5 accent-sapphire rounded" />
             <div className="flex flex-col gap-0.5">
               <span className="text-sapphire text-sm font-medium group-hover:brightness-110 transition-all">
-                HelpAI All-in-One 多模型环境
+                多模型协作环境
               </span>
               <span className="text-overlay0 text-xs">配置 Codex+Gemini MCP 服务与 Claude 协作</span>
             </div>
@@ -1181,7 +1181,7 @@ function PlainIntakeForm({ onBack, onStart }: PlainIntakeFormProps) {
           className="w-full py-3 bg-surface1 text-text rounded-lg font-bold text-sm
                      hover:bg-surface0 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          启动 Claude →
+          启动 →
         </button>
       </div>
     </div>
