@@ -24,12 +24,15 @@ export class PtySession {
 
   constructor(opts: SessionOptions) {
     const shell = getDefaultShell()
-    this.proc = pty.spawn(shell, [], {
+    const args  = getDefaultShellArgs(shell)
+    this.proc = pty.spawn(shell, args, {
       name: "xterm-color",
-      cwd: opts.cwd,
+      cwd:  opts.cwd,
       cols: opts.cols ?? 120,
       rows: opts.rows ?? 30,
-      env: opts.env ?? process.env,
+      env:  opts.env ?? process.env,
+      // Windows ConPTY 提供更好的 ANSI 转义序列支持
+      ...(process.platform === "win32" ? { useConpty: true } : {}),
     })
 
     // 将输出广播给所有监听器
@@ -53,7 +56,12 @@ export class PtySession {
   kill(signal = 15): void {
     if (this.killed) return
     this.killed = true
-    this.proc.kill(signal)
+    // Windows ConPTY 不支持发送信号数字，直接调用无参 kill
+    if (process.platform === "win32") {
+      this.proc.kill()
+    } else {
+      this.proc.kill(signal)
+    }
   }
 
   /** 注册数据监听器，返回取消订阅函数 */
@@ -121,4 +129,15 @@ export class PtySessionManager {
 function getDefaultShell(): string {
   if (process.platform === "win32") return "powershell.exe"
   return process.env.SHELL ?? (os.platform() === "darwin" ? "/bin/zsh" : "/bin/bash")
+}
+
+/** Windows PowerShell/pwsh 启动参数：
+ *  -NoLogo            抑制版本 Banner
+ *  -ExecutionPolicy Bypass  允许运行 npm 安装的 .ps1 脚本（仅作用于当前进程，不修改系统策略）
+ */
+function getDefaultShellArgs(shell: string): string[] {
+  if (process.platform === "win32" && /(?:^|[/\\])(?:powershell|pwsh)\.exe$/i.test(shell)) {
+    return ["-NoLogo", "-ExecutionPolicy", "Bypass"]
+  }
+  return []
 }

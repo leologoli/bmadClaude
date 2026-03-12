@@ -36,9 +36,13 @@ export const IPC = {
   // 本地存储
   STORAGE_LIST_PROJECTS:   "storage:list-projects",
   STORAGE_DELETE_PROJECT:  "storage:delete-project",
+  STORAGE_UPSERT_PROJECT:  "storage:upsert-project",
 
   // 原生对话框
   DIALOG_OPEN_DIR: "dialog:open-dir",
+
+  // 文件系统
+  FS_LIST_DIR: "fs:list-dir",
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -94,6 +98,7 @@ export type BmadRole =
   | "pm"           // PM：撰写 PRD
   | "ux-designer"  // UX/UI 设计：交互与视觉规范
   | "architect"    // 架构师：技术方案设计
+  | "epic-planner" // 史诗规划：分解故事并验证准备度
   | "developer"    // 开发者：编码实现
   | "qa"           // QA：质量审查
   | "done"         // 已完成
@@ -173,6 +178,15 @@ export interface StorageProjectItem {
   path:      string
   updatedAt: number
   lastRole?: string   // 上次会话的当前角色（如 "pm"、"architect"）
+  isPlain?:  boolean  // true 表示普通任务（无 BMAD 工作流）
+}
+
+/** 保存/更新项目记录的请求 */
+export interface StorageUpsertProjectRequest {
+  id:       string
+  name:     string
+  path:     string
+  isPlain?: boolean
 }
 
 // ============================================================
@@ -192,6 +206,16 @@ export interface DepCheckResult {
   gemini:   DepStatus
   uvx:      DepStatus  // uv/uvx（All-in-One MCP server 运行依赖）
   allInOne: DepStatus  // HelpAI All-in-One 多模型环境（Codex+Gemini MCP + CLAUDE.md）
+}
+
+// ============================================================
+// 文件系统
+// ============================================================
+
+export interface FsEntry {
+  name:  string
+  path:  string          // 绝对路径
+  isDir: boolean
 }
 
 // ============================================================

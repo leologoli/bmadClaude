@@ -13,7 +13,9 @@ import {
   type WorkflowSnapshot,
   type PtyDataEvent,
   type PtyExitEvent,
+  type FsEntry,
   type StorageProjectItem,
+  type StorageUpsertProjectRequest,
 } from "@bmad-claude/ipc-contracts"
 
 // ============================================================
@@ -37,11 +39,17 @@ const api = {
   storage: {
     listProjects:  (): Promise<StorageProjectItem[]> => ipcRenderer.invoke(IPC.STORAGE_LIST_PROJECTS),
     deleteProject: (projectPath: string): Promise<void> => ipcRenderer.invoke(IPC.STORAGE_DELETE_PROJECT, projectPath),
+    saveProject:   (req: StorageUpsertProjectRequest): Promise<void> => ipcRenderer.invoke(IPC.STORAGE_UPSERT_PROJECT, req),
   },
 
   // 原生对话框
   dialog: {
     openDir: (): Promise<string | null> => ipcRenderer.invoke(IPC.DIALOG_OPEN_DIR),
+  },
+
+  // 文件系统（懒加载目录内容）
+  fs: {
+    listDir: (dirPath: string): Promise<FsEntry[]> => ipcRenderer.invoke(IPC.FS_LIST_DIR, dirPath),
   },
 
   // BMAD-METHOD 安装器

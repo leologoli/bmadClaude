@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react"
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import type { BmadRole, DepCheckResult, WorkflowSnapshot, StorageProjectItem } from "@bmad-claude/ipc-contracts"
@@ -14,20 +14,21 @@ interface RoleConfig {
 }
 
 const ROLE_CONFIGS: Record<BmadRole, RoleConfig> = {
-  intake:      { label: "项目导入",  description: "填写项目基本信息",         emoji: "📋" },
-  brainstorm:  { label: "头脑风暴",  description: "探索创意与方向",           emoji: "💡" },
-  analyst:     { label: "需求分析",  description: "BA 澄清与分析需求",        emoji: "🔍" },
-  pm:          { label: "产品规划",  description: "PM 撰写 PRD 文档",         emoji: "📝" },
+  intake:       { label: "项目导入",   description: "填写项目基本信息",         emoji: "📋" },
+  brainstorm:   { label: "头脑风暴",   description: "探索创意与方向",           emoji: "💡" },
+  analyst:      { label: "需求分析",   description: "BA 澄清与分析需求",        emoji: "🔍" },
+  pm:           { label: "产品规划",   description: "PM 撰写 PRD 文档",         emoji: "📝" },
   "ux-designer":{ label: "UX/UI 设计", description: "交互设计与视觉规范",     emoji: "🎨" },
-  architect:   { label: "架构设计",  description: "架构师制定技术方案",       emoji: "🏗️" },
-  developer:   { label: "编码实现",  description: "开发者实现功能代码",       emoji: "💻" },
-  qa:          { label: "质量审查",  description: "QA 验收与测试",            emoji: "✅" },
-  done:        { label: "已完成",    description: "项目交付完成",             emoji: "🎉" },
-  failed:      { label: "中断",      description: "工作流异常中断",           emoji: "❌" },
+  architect:    { label: "架构设计",   description: "架构师制定技术方案",       emoji: "🏗️" },
+  "epic-planner":{ label: "史诗规划",  description: "分解故事并验证准备度",     emoji: "📚" },
+  developer:    { label: "编码实现",   description: "开发者实现功能代码",       emoji: "💻" },
+  qa:           { label: "质量审查",   description: "QA 验收与测试",            emoji: "✅" },
+  done:         { label: "已完成",     description: "项目交付完成",             emoji: "🎉" },
+  failed:       { label: "中断",       description: "工作流异常中断",           emoji: "❌" },
 }
 
 const ROLE_SEQUENCE: BmadRole[] = [
-  "intake", "brainstorm", "analyst", "pm", "ux-designer", "architect", "developer", "qa", "done",
+  "intake", "brainstorm", "analyst", "pm", "ux-designer", "architect", "epic-planner", "developer", "qa", "done",
 ]
 
 // Catppuccin Mocha 主题
@@ -84,7 +85,8 @@ export default function App() {
   const [pendingRole, setPendingRole]   = useState<BmadRole | null>(null)
   const [pendingMsg, setPendingMsg]     = useState("")
   const [isPlain, setIsPlain]           = useState(false)  // 普通任务模式（无 BMAD 工作流）
-  const [showExitConfirm, setShowExitConfirm] = useState(false)
+  const [showExitConfirm, setShowExitConfirm]     = useState(false)
+  const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false)
   const pendingInputRef = useRef<HTMLInputElement>(null)
   const terminalRef     = useRef<TerminalHandle>(null)
 
@@ -128,9 +130,11 @@ export default function App() {
 
   // ── 普通任务：跳过安装和工作流，直接启动 ──
   async function launchPlainSession(pPath: string) {
-    const name = pPath.split("/").pop() || "任务"
+    const name = pPath.split(/[\\/]/).pop() || "任务"
     setProjectName(name)
     setProjectPath(pPath)
+    // 写入历史记录，普通任务标记 isPlain
+    await window.bmad.storage.saveProject({ id: sessionId, name, path: pPath, isPlain: true }).catch(() => {})
     await window.bmad.pty.spawn({ sessionId, cwd: pPath })
     setPtyStatus("connected")
     await window.bmad.pty.write({ sessionId, data: "claude\r" })
@@ -262,8 +266,13 @@ export default function App() {
   async function handleResume(item: StorageProjectItem) {
     setProjectName(item.name)
     setProjectPath(item.path)
-    const role = (item.lastRole as BmadRole | undefined) ?? "brainstorm"
-    await launchSession(item.name, item.path, role)
+    if (item.isPlain) {
+      // 普通任务：直接启动 PTY，无工作流
+      await launchPlainSession(item.path)
+    } else {
+      const role = (item.lastRole as BmadRole | undefined) ?? "brainstorm"
+      await launchSession(item.name, item.path, role)
+    }
   }
 
   // ── 保存当前会话：通过 /rename 命名 Claude Code 会话 ──
@@ -284,6 +293,7 @@ export default function App() {
     setProjectName("")
     setProjectPath("")
     setIsPlain(false)
+    setIsFileBrowserOpen(false)
     setInstallPhase("idle")
     setInstallError(null)
     setDepResult(null)
@@ -451,9 +461,24 @@ export default function App() {
           >
             <span>✕</span><span>退出</span>
           </button>
+          <button
+            onClick={() => setIsFileBrowserOpen(v => !v)}
+            title="文件浏览器"
+            className={[
+              "text-xs px-2 py-0.5 rounded border transition-colors flex items-center gap-1",
+              isFileBrowserOpen
+                ? "border-sapphire/50 text-sapphire bg-sapphire/10"
+                : "border-transparent text-overlay0 hover:text-sapphire hover:border-sapphire/30",
+            ].join(" ")}
+          >
+            <span>📁</span>
+          </button>
           <PtyIndicator status={ptyStatus} />
         </div>
-        <TerminalView ref={terminalRef} sessionId={sessionId} started={started} />
+        <div className="flex flex-1 overflow-hidden">
+          <TerminalView ref={terminalRef} sessionId={sessionId} started={started} />
+          <FileBrowser isOpen={isFileBrowserOpen} onClose={() => setIsFileBrowserOpen(false)} rootPath={projectPath} />
+        </div>
       </div>
     )
   }
@@ -473,7 +498,7 @@ export default function App() {
       <aside className="w-60 flex flex-col bg-mantle border-r border-surface0 shrink-0">
 
         <div className="px-4 py-4 border-b border-surface0">
-          <h1 className="text-mauve font-bold text-base tracking-tight">BMAD Claude</h1>
+          <h1 className="text-mauve font-bold text-base tracking-tight">云服务流程工具</h1>
           <p className="text-overlay0 text-xs mt-0.5">AI 驱动的敏捷开发</p>
         </div>
 
@@ -649,12 +674,27 @@ export default function App() {
               <span>✕</span>
               <span>退出</span>
             </button>
+            <button
+              onClick={() => setIsFileBrowserOpen(v => !v)}
+              title="文件浏览器"
+              className={[
+                "text-xs px-2 py-0.5 rounded border transition-colors flex items-center gap-1",
+                isFileBrowserOpen
+                  ? "border-sapphire/50 text-sapphire bg-sapphire/10"
+                  : "border-transparent text-overlay0 hover:text-sapphire hover:border-sapphire/30",
+              ].join(" ")}
+            >
+              <span>📁</span>
+            </button>
             <PtyIndicator status={ptyStatus} />
           </div>
         )}
 
-        {/* xterm.js 终端（原生 TUI，完整交互）*/}
-        <TerminalView ref={terminalRef} sessionId={sessionId} started={started} />
+        {/* xterm.js 终端 + 右侧可折叠文件浏览器 */}
+        <div className="flex flex-1 overflow-hidden">
+          <TerminalView ref={terminalRef} sessionId={sessionId} started={started} />
+          <FileBrowser isOpen={isFileBrowserOpen} onClose={() => setIsFileBrowserOpen(false)} rootPath={projectPath} />
+        </div>
       </main>
     </div>
   )
@@ -668,14 +708,24 @@ interface TerminalHandle { focus(): void }
 
 const TerminalView = forwardRef<TerminalHandle, { sessionId: string; started: boolean }>(
 function TerminalView({ sessionId, started }, ref) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const termRef      = useRef<Terminal | null>(null)
-  const fitRef       = useRef<FitAddon | null>(null)
+  const containerRef  = useRef<HTMLDivElement>(null)
+  const termRef       = useRef<Terminal | null>(null)
+  const fitRef        = useRef<FitAddon | null>(null)
+  const resizeTimer   = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [showScrollBtn, setShowScrollBtn] = useState(false)
 
   // 暴露 focus() 给父组件（用于按钮点击后聚焦终端）
   useImperativeHandle(ref, () => ({
     focus: () => termRef.current?.focus(),
   }))
+
+  // 检查是否在底部
+  const checkAtBottom = useCallback(() => {
+    const term = termRef.current
+    if (!term) return true
+    const buf = term.buffer.active
+    return buf.viewportY >= buf.length - term.rows
+  }, [])
 
   // 初始化 Terminal
   useEffect(() => {
@@ -699,39 +749,82 @@ function TerminalView({ sessionId, started }, ref) {
     termRef.current = term
     fitRef.current  = fit
 
+    // 监听滚动事件，判断是否显示跳转按钮
+    term.onScroll(() => {
+      const atBottom = checkAtBottom()
+      setShowScrollBtn(!atBottom)
+    })
+
     return () => {
       term.dispose()
       termRef.current = null
       fitRef.current  = null
     }
-  }, [])
+  }, [checkAtBottom])
 
-  // 监听容器尺寸变化 → 自动 fit + 通知 PTY resize
+  // 监听容器尺寸变化 → 防抖 fit + 通知 PTY resize
+  // 防抖：避免面板动画期间高频 fit() 导致 xterm.js viewport 跳到顶部
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
 
     const observer = new ResizeObserver(() => {
-      fitRef.current?.fit()
-      const term = termRef.current
-      if (term && started) {
-        void window.bmad.pty.resize({ sessionId, cols: term.cols, rows: term.rows })
-      }
+      if (resizeTimer.current) clearTimeout(resizeTimer.current)
+      resizeTimer.current = setTimeout(() => {
+        const term = termRef.current
+        const fit  = fitRef.current
+        if (!fit || !term) return
+
+        // 记录 fit 前是否在底部，fit 后恢复
+        const buf = term.buffer.active
+        const atBottom = buf.viewportY >= buf.length - term.rows
+        fit.fit()
+        if (atBottom) term.scrollToBottom()
+
+        if (started) {
+          void window.bmad.pty.resize({ sessionId, cols: term.cols, rows: term.rows })
+        }
+      }, 50)
     })
     observer.observe(el)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      if (resizeTimer.current) clearTimeout(resizeTimer.current)
+    }
   }, [sessionId, started])
+
+  // started 变为 true 后立即同步终端实际尺寸给 PTY
+  // PTY 默认以 120×30 启动，不同步会导致 TUI 渲染在顶部区域
+  useEffect(() => {
+    if (!started) return
+    const id = requestAnimationFrame(() => {
+      const fit  = fitRef.current
+      const term = termRef.current
+      if (!fit || !term) return
+      fit.fit()
+      void window.bmad.pty.resize({ sessionId, cols: term.cols, rows: term.rows })
+    })
+    return () => cancelAnimationFrame(id)
+  }, [started, sessionId])
 
   // PTY 数据 → 写入 xterm
   useEffect(() => {
     if (!started) return
     const off = window.bmad.pty.onData((ev) => {
       if (ev.sessionId === sessionId) {
-        termRef.current?.write(ev.data)
+        const term = termRef.current
+        if (term) {
+          const wasAtBottom = checkAtBottom()
+          term.write(ev.data)
+          // 如果之前在底部，新数据写入后保持滚动到底部
+          if (wasAtBottom) {
+            term.scrollToBottom()
+          }
+        }
       }
     })
     return () => off()
-  }, [started, sessionId])
+  }, [started, sessionId, checkAtBottom])
 
   // xterm 用户输入 → 写入 PTY
   useEffect(() => {
@@ -745,11 +838,29 @@ function TerminalView({ sessionId, started }, ref) {
   }, [started, sessionId, termRef.current])
 
   return (
-    <div
-      ref={containerRef}
-      className="flex-1 min-h-0 overflow-hidden"
-      style={{ padding: "4px" }}
-    />
+    <div className="relative flex-1 min-h-0 overflow-hidden">
+      <div
+        ref={containerRef}
+        className="w-full h-full"
+        style={{ padding: "4px" }}
+      />
+      {/* 跳转到底部按钮 */}
+      {showScrollBtn && (
+        <button
+          onClick={() => {
+            termRef.current?.scrollToBottom()
+            setShowScrollBtn(false)
+          }}
+          className="absolute bottom-4 right-4 px-3 py-1.5 bg-surface0 hover:bg-surface1
+                     text-text text-xs font-medium rounded-lg border border-mauve/50
+                     shadow-lg transition-all flex items-center gap-1.5 z-50"
+          title="跳转到底部"
+        >
+          <span>↓</span>
+          <span>跳转到底部</span>
+        </button>
+      )}
+    </div>
   )
 })
 
@@ -1196,7 +1307,7 @@ function PlainIntakeForm({ onBack, onStart }: PlainIntakeFormProps) {
 const ROLE_LABEL: Record<string, string> = {
   intake: "项目导入", brainstorm: "头脑风暴", analyst: "需求分析",
   pm: "产品规划", "ux-designer": "UX/UI 设计", architect: "架构设计",
-  developer: "编码实现", qa: "质量审查", done: "已完成",
+  "epic-planner": "史诗规划", developer: "编码实现", qa: "质量审查", done: "已完成",
 }
 
 function getRelativeTime(ts: number): string {
@@ -1223,7 +1334,7 @@ function ProjectPickerScreen({ projects, onResume, onDelete, onNew, onNewPlain }
 
         {/* 标题区 */}
         <div className="text-center space-y-2">
-          <h1 className="text-4xl font-bold text-mauve tracking-tight">BMAD Claude</h1>
+          <h1 className="text-4xl font-bold text-mauve tracking-tight">云服务流程工具</h1>
           <p className="text-subtext">选择一个现有项目，或开启新的旅程</p>
         </div>
 
@@ -1370,6 +1481,138 @@ function ExitConfirmModal({ onSaveExit, onExit, onCancel }: ExitConfirmModalProp
 }
 
 // ============================================================
+// 文件浏览器
+// ============================================================
+
+interface FsEntry { name: string; path: string; isDir: boolean }
+
+interface FileNodeState {
+  entry:    FsEntry
+  children: FileNodeState[] | null  // null = 未加载，[] = 已加载但为空
+  expanded: boolean
+}
+
+function buildRoots(entries: FsEntry[]): FileNodeState[] {
+  return entries.map(e => ({ entry: e, children: null, expanded: false }))
+}
+
+// 递归更新树中指定路径节点的状态
+function updateNode(
+  nodes: FileNodeState[],
+  targetPath: string,
+  updater: (n: FileNodeState) => FileNodeState,
+): FileNodeState[] {
+  return nodes.map(n => {
+    if (n.entry.path === targetPath) return updater(n)
+    if (n.children) return { ...n, children: updateNode(n.children, targetPath, updater) }
+    return n
+  })
+}
+
+interface FileBrowserProps {
+  isOpen:      boolean
+  onClose:     () => void
+  rootPath:    string
+}
+
+function FileBrowser({ isOpen, onClose, rootPath }: FileBrowserProps) {
+  const [nodes, setNodes] = useState<FileNodeState[]>([])
+
+  // 根目录加载
+  useEffect(() => {
+    if (!isOpen || !rootPath) return
+    window.bmad.fs.listDir(rootPath).then(entries => setNodes(buildRoots(entries))).catch(() => {})
+  }, [isOpen, rootPath])
+
+  // 点击文件夹：懒加载子项并切换展开状态
+  async function toggleDir(node: FileNodeState) {
+    const p = node.entry.path
+    if (!node.expanded && node.children === null) {
+      // 首次展开：请求子内容
+      const children = await window.bmad.fs.listDir(p).catch(() => [] as FsEntry[])
+      setNodes(prev => updateNode(prev, p, n => ({
+        ...n, expanded: true, children: buildRoots(children),
+      })))
+    } else {
+      setNodes(prev => updateNode(prev, p, n => ({ ...n, expanded: !n.expanded })))
+    }
+  }
+
+  // 点击文件：复制路径到剪贴板
+  function copyPath(p: string) {
+    navigator.clipboard.writeText(p).catch(() => {})
+  }
+
+  return (
+    <div
+      className={[
+        "flex flex-col bg-mantle border-l border-surface0 shrink-0 transition-all duration-300 ease-in-out",
+        isOpen ? "w-[220px]" : "w-0 border-transparent",
+      ].join(" ")}
+    >
+      {/* 固定宽度内容容器，防止收起动画时文字换行 */}
+      <div className="w-[220px] h-full flex flex-col overflow-hidden">
+        <div className="h-9 bg-crust border-b border-surface0 flex items-center px-3 shrink-0 gap-2">
+          <span className="text-xs font-semibold text-subtext uppercase tracking-wider flex-1">文件</span>
+          <button
+            onClick={onClose}
+            className="text-overlay0 hover:text-red transition-colors p-1 rounded hover:bg-surface0"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
+          {nodes.map(n => (
+            <FileTreeNode key={n.entry.path} node={n} depth={0} onToggleDir={toggleDir} onClickFile={copyPath} />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FileTreeNode({ node, depth, onToggleDir, onClickFile }: {
+  node:         FileNodeState
+  depth:        number
+  onToggleDir:  (n: FileNodeState) => void
+  onClickFile:  (path: string) => void
+}) {
+  const { entry, expanded, children } = node
+  const icon = entry.isDir
+    ? (expanded ? "📂" : "📁")
+    : getFileIcon(entry.name)
+
+  return (
+    <div>
+      <div
+        className="flex items-center gap-1 py-[2px] hover:bg-surface0 cursor-pointer select-none transition-colors"
+        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        title={entry.path}
+        onClick={() => entry.isDir ? onToggleDir(node) : onClickFile(entry.path)}
+      >
+        <span className="w-4 flex-shrink-0 text-center text-[11px] leading-none">{icon}</span>
+        <span className="text-xs text-text truncate">{entry.name}</span>
+      </div>
+      {entry.isDir && expanded && children && children.map(c => (
+        <FileTreeNode key={c.entry.path} node={c} depth={depth + 1} onToggleDir={onToggleDir} onClickFile={onClickFile} />
+      ))}
+    </div>
+  )
+}
+
+function getFileIcon(name: string): string {
+  if (name.endsWith(".ts") || name.endsWith(".tsx")) return "🔷"
+  if (name.endsWith(".md"))   return "📝"
+  if (name.endsWith(".json")) return "🔧"
+  if (name.endsWith(".css"))  return "🎨"
+  if (name.endsWith(".html")) return "🌐"
+  if (name.endsWith(".yml") || name.endsWith(".yaml")) return "⚙️"
+  return "📄"
+}
+
+// ============================================================
 // Window 类型扩展
 // ============================================================
 
@@ -1387,9 +1630,13 @@ declare global {
       storage: {
         listProjects:  () => Promise<import("@bmad-claude/ipc-contracts").StorageProjectItem[]>
         deleteProject: (projectPath: string) => Promise<void>
+        saveProject:   (req: import("@bmad-claude/ipc-contracts").StorageUpsertProjectRequest) => Promise<void>
       }
       dialog: {
         openDir: () => Promise<string | null>
+      }
+      fs: {
+        listDir: (dirPath: string) => Promise<import("@bmad-claude/ipc-contracts").FsEntry[]>
       }
       installer: {
         install:        (req: import("@bmad-claude/ipc-contracts").BmadInstallRequest) => Promise<import("@bmad-claude/ipc-contracts").BmadInstallResponse>

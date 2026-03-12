@@ -1,5 +1,6 @@
-import { exec } from "node:child_process"
+import { exec, execFile } from "node:child_process"
 import fs from "node:fs/promises"
+import fsSync from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
@@ -8,6 +9,7 @@ import {
   IPC,
   type BmadRole,
   type BmadInstallRequest,
+  type FsEntry,
   type PingRequest,
   type PtyKillRequest,
   type PtyResizeRequest,
@@ -16,6 +18,7 @@ import {
   type WorkflowEventRequest,
   type WorkflowStartRequest,
   type StorageProjectItem,
+  type StorageUpsertProjectRequest,
 } from "@bmad-claude/ipc-contracts"
 import { BmadInstaller } from "@bmad-claude/bmad-registry"
 import { PtySessionManager } from "@bmad-claude/pty-bridge"
@@ -33,18 +36,72 @@ const bmadInstaller   = new BmadInstaller()
 
 let mainWindow: BrowserWindow | null = null
 
-const execAsync = promisify(exec)
+const execAsync     = promisify(exec)
+const execFileAsync = promisify(execFile)
 
-// 扩展 PATH：覆盖 macOS 上 Node.js / npm / Claude 的常见安装位置
-const EXTENDED_PATH = [
-  "/usr/local/bin",
-  "/opt/homebrew/bin",
-  "/opt/homebrew/sbin",
-  path.join(os.homedir(), ".local/bin"),        // Claude CLI 默认安装路径
-  path.join(os.homedir(), ".npm-global/bin"),
-  path.join(os.homedir(), ".nvm/versions/node/*/bin"),
-  process.env["PATH"] ?? "",
-].filter(Boolean).join(path.delimiter)
+// 同步枚举 nvm 版本目录，获取所有 bin 路径
+function getNvmBinPaths(): string[] {
+  const nvmVersionsDir = path.join(os.homedir(), ".nvm", "versions", "node")
+
+  try {
+    return fsSync
+      .readdirSync(nvmVersionsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(nvmVersionsDir, entry.name, "bin"))
+  } catch {
+    return []
+  }
+}
+
+// 扩展 PATH：覆盖各平台上 Node.js / npm / Claude / uv 的常见安装位置
+const PLATFORM_PATH_PREFIXES = process.platform === "win32"
+  ? [
+    // Windows：npm 全局目录、uv 安装目录、WindowsApps（winget 安装工具）
+    process.env["APPDATA"]      ? path.join(process.env["APPDATA"],      "npm")                              : "",
+    process.env["LOCALAPPDATA"] ? path.join(process.env["LOCALAPPDATA"], "Programs", "uv", "bin")           : "",
+    process.env["LOCALAPPDATA"] ? path.join(process.env["LOCALAPPDATA"], "Microsoft", "WindowsApps")        : "",
+    path.join(os.homedir(), ".local", "bin"),
+  ]
+  : [
+    // macOS / Linux：Homebrew、.local/bin（Claude CLI）、nvm、npm-global
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    path.join(os.homedir(), ".local/bin"),
+    path.join(os.homedir(), ".npm-global/bin"),
+    ...getNvmBinPaths(),
+  ]
+
+let EXTENDED_PATH = [...PLATFORM_PATH_PREFIXES, process.env["PATH"] ?? ""]
+  .filter(Boolean)
+  .join(path.delimiter)
+
+// 启动时通过 login shell 加载系统 PATH（macOS/Linux 应用启动时不会加载 shell 配置）
+let SYSTEM_PATH_LOADED = false
+
+async function loadSystemPath(): Promise<void> {
+  if (SYSTEM_PATH_LOADED || process.platform === "win32") return
+
+  try {
+    // 使用 printenv 避免 shell 启动脚本的输出干扰（如 banner、日志等）
+    const shell = process.env["SHELL"] ?? (process.platform === "darwin" ? "/bin/zsh" : "/bin/bash")
+    const { stdout } = await execAsync(`"${shell}" -l -c 'printenv PATH'`, { timeout: 5000 })
+    const systemPath = stdout.trim()
+
+    if (systemPath && systemPath !== process.env["PATH"]) {
+      console.log("[ENV] Loaded system PATH from login shell")
+      process.env["PATH"] = systemPath
+      // 重新构建 EXTENDED_PATH，包含系统 PATH 中的所有路径
+      EXTENDED_PATH = [...PLATFORM_PATH_PREFIXES, systemPath]
+        .filter(Boolean)
+        .join(path.delimiter)
+    }
+    SYSTEM_PATH_LOADED = true
+  } catch (err) {
+    console.warn("[ENV] Failed to load system PATH:", err)
+    SYSTEM_PATH_LOADED = true  // 避免重复尝试
+  }
+}
 
 // ============================================================
 // 多模型协作环境（Codex+Gemini MCP + CLAUDE.md）
@@ -58,6 +115,16 @@ const MCP_CMDS = {
   codex:  "claude mcp add codex -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/codexmcp.git codexmcp",
   gemini: "claude mcp add gemini -s user --transport stdio -- uvx --from git+https://github.com/GuDaStudio/geminimcp.git geminimcp",
 }
+
+// Windows 专用：MCP 包的 git 仓库与 venv 脚本名称
+const MCP_PACKAGES = [
+  { name: "codex",  repo: "https://github.com/GuDaStudio/codexmcp.git",  script: "codexmcp"  },
+  { name: "gemini", repo: "https://github.com/GuDaStudio/geminimcp.git", script: "geminimcp" },
+] as const
+
+// Windows 专用：MCP venv 与源码目录（持久化，安装一次即可）
+const MCP_VENV_DIR = path.join(os.homedir(), ".bmad-claude", "mcp-venv")
+const MCP_SRC_DIR  = path.join(os.homedir(), ".bmad-claude", "mcp-src")
 
 // 追加到 ~/.claude/CLAUDE.md 的 All-in-One 核心指令内容
 const ALL_IN_ONE_MD = `
@@ -178,13 +245,17 @@ const ALL_IN_ONE_MD = `
 
 `.trim()
 
-// ── 通用 login shell 执行 ──
+// ── 通用 shell 执行（跨平台）──
 async function runLoginShell(cmd: string, timeout = 8000): Promise<{ stdout: string; stderr: string }> {
+  const env = { ...process.env, PATH: EXTENDED_PATH }
+  if (process.platform === "win32") {
+    // Windows：cmd.exe 执行命令字符串
+    const comSpec = process.env["ComSpec"] ?? process.env["COMSPEC"] ?? "cmd.exe"
+    return execAsync(`"${comSpec}" /d /s /c ${JSON.stringify(cmd)}`, { env, timeout })
+  }
+  // macOS / Linux：login shell 确保 .zshrc/.zprofile 中的 PATH 生效
   const shell = process.env["SHELL"] ?? "/bin/zsh"
-  return execAsync(`${shell} -l -c ${JSON.stringify(cmd)}`, {
-    env: { ...process.env, PATH: EXTENDED_PATH },
-    timeout,
-  })
+  return execAsync(`"${shell}" -l -c ${JSON.stringify(cmd)}`, { env, timeout })
 }
 
 // ── 从 ~/.claude.json 读取已注册的 MCP server 名称（-s user 安装写此文件）──
@@ -237,8 +308,18 @@ async function checkUvx(): Promise<boolean> {
   } catch { return false }
 }
 
-// ── 安装 uv/uvx（macOS/Linux 通用安装脚本）──
+// ── 安装 uv/uvx（跨平台）──
 async function installUvx(): Promise<void> {
+  if (process.platform === "win32") {
+    // Windows：直接调用 powershell.exe + 数组参数，规避 cmd.exe 双引号转义问题
+    await execFileAsync("powershell", [
+      "-NoLogo", "-NoProfile",
+      "-ExecutionPolicy", "Bypass",
+      "-Command", "irm https://astral.sh/uv/install.ps1 | iex",
+    ], { env: { ...process.env, PATH: EXTENDED_PATH }, timeout: 120_000 })
+    return
+  }
+  // macOS / Linux：通过 sh 执行官方 shell 安装脚本
   await runLoginShell("curl -LsSf https://astral.sh/uv/install.sh | sh", 120_000)
 }
 
@@ -246,6 +327,72 @@ async function installUvx(): Promise<void> {
 async function checkAllInOne(): Promise<{ installed: boolean }> {
   const [mcpNames, hasCI] = await Promise.all([getRegisteredMcpNames(), hasCoreInstruction()])
   return { installed: mcpNames.has("codex") && mcpNames.has("gemini") && hasCI }
+}
+
+// ── Windows：克隆 MCP 包（跳过子模块）并安装到专属 venv ──
+// uvx --from git+https://... 会执行 git submodule update，在部分 Windows 环境失败；
+// 改用 git clone --no-recurse-submodules + uv pip install 本地目录，完全绕开子模块问题
+async function installMcpVenvWindows(): Promise<void> {
+  if (process.platform !== "win32") return
+
+  const pythonExe = path.join(MCP_VENV_DIR, "Scripts", "python.exe")
+  const scriptExes = MCP_PACKAGES.map(p => path.join(MCP_VENV_DIR, "Scripts", `${p.script}.exe`))
+
+  // 检查 venv 是否完整：python.exe + 全部 MCP 脚本都存在则跳过
+  const checks = await Promise.all(
+    [pythonExe, ...scriptExes].map(f => fs.access(f).then(() => true).catch(() => false))
+  )
+  if (checks.every(Boolean)) {
+    console.log("[MCP] Windows venv already complete, skipping reinstall")
+    return
+  }
+
+  // 有任意文件缺失：清理旧环境，全量重建
+  const env = { ...process.env, PATH: EXTENDED_PATH }
+  await fs.rm(MCP_SRC_DIR,  { recursive: true, force: true }).catch(() => {})
+  await fs.rm(MCP_VENV_DIR, { recursive: true, force: true }).catch(() => {})
+  await fs.mkdir(MCP_SRC_DIR, { recursive: true })
+
+  // 1. 逐个克隆（无子模块）
+  for (const pkg of MCP_PACKAGES) {
+    const dest = path.join(MCP_SRC_DIR, pkg.name)
+    await execAsync(`git clone --no-recurse-submodules "${pkg.repo}" "${dest}"`, { env, timeout: 120_000 })
+    console.log(`[MCP] Cloned ${pkg.name} to ${dest}`)
+  }
+
+  // 2. 创建 venv
+  await execAsync(`uv venv "${MCP_VENV_DIR}"`, { env, timeout: 30_000 })
+
+  // 3. 将所有包安装进 venv
+  const srcPaths = MCP_PACKAGES.map(p => `"${path.join(MCP_SRC_DIR, p.name)}"`).join(" ")
+  await execAsync(`uv pip install ${srcPaths} --python "${pythonExe}"`, { env, timeout: 120_000 })
+  console.log("[MCP] Packages installed to venv")
+}
+
+// ── Windows：将 ~/.claude.json 中 MCP server 的 command 替换为 venv 内的可执行文件 ──
+async function patchMcpEnvForWindows(): Promise<void> {
+  if (process.platform !== "win32") return
+
+  try {
+    const raw  = await fs.readFile(USER_CLAUDE_JSON_PATH, "utf-8")
+    const json = JSON.parse(raw) as {
+      mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>
+    }
+    if (!json.mcpServers) return
+
+    let patched = false
+    for (const pkg of MCP_PACKAGES) {
+      if (json.mcpServers[pkg.name]) {
+        // 用 venv 中安装的脚本直接执行，不再依赖 uvx + git submodule
+        json.mcpServers[pkg.name].command = path.join(MCP_VENV_DIR, "Scripts", `${pkg.script}.exe`)
+        json.mcpServers[pkg.name].args    = []
+        json.mcpServers[pkg.name].env     = { PATH: EXTENDED_PATH }
+        patched = true
+      }
+    }
+    if (patched) await fs.writeFile(USER_CLAUDE_JSON_PATH, JSON.stringify(json, null, 2) + "\n", "utf-8")
+    console.log("[MCP] Windows venv patch applied")
+  } catch { /* 文件不存在或 JSON 损坏，跳过 */ }
 }
 
 // ── 幂等地追加 Core Instruction 到 CLAUDE.md ──
@@ -265,15 +412,21 @@ async function installAllInOne(): Promise<{ ok: boolean; error?: string }> {
     const hasUvx = await checkUvx()
     if (!hasUvx) await installUvx()
 
-    // 2. 注册 MCP servers（用 getRegisteredMcpNames 合并两种来源，确保幂等）
+    // 2. 注册 MCP servers（claude mcp add 仅写配置，不实际运行 uvx）
     const existing = await getRegisteredMcpNames()
     if (!existing.has("codex"))  await runLoginShell(MCP_CMDS.codex,  120_000)
     if (!existing.has("gemini")) await runLoginShell(MCP_CMDS.gemini, 120_000)
 
-    // 3. 追加 CLAUDE.md（已含 Core Instruction 则跳过）
+    // 3. Windows：克隆 MCP 包（跳过子模块）并安装到专属 venv
+    await installMcpVenvWindows()
+
+    // 4. Windows：将 ~/.claude.json 中的命令替换为 venv 脚本路径
+    await patchMcpEnvForWindows()
+
+    // 5. 追加 CLAUDE.md（已含 Core Instruction 则跳过）
     await ensureCoreInstruction()
 
-    // 4. 最终验证
+    // 6. 最终验证
     const result = await checkAllInOne()
     if (!result.installed) return { ok: false, error: "安装完成但验证未通过，请检查 claude CLI 是否正常" }
     return { ok: true }
@@ -292,12 +445,13 @@ const projectSessionMap    = new Map<string, string>()
 // 命令由 `npx bmad-method install --tools claude-code` 安装到项目的 .claude/commands/
 // ============================================================
 
-const BMAD_SLASH_COMMANDS: Partial<Record<BmadRole, string>> = {
+const BMAD_SLASH_COMMANDS: Partial<Record<BmadRole, string | string[]>> = {
   brainstorm:    "/bmad-brainstorming",
   analyst:       "/bmad-bmm-create-product-brief",
   pm:            "/bmad-bmm-create-prd",
   "ux-designer": "/bmad-bmm-create-ux-design",
   architect:     "/bmad-bmm-create-architecture",
+  "epic-planner": ["/bmad-create-epics-and-stories", "/bmad-check-implementation-readiness"],
   developer:     "/bmad-bmm-dev-story",
   qa:            "/bmad-bmm-qa-generate-e2e-tests",
 }
@@ -346,8 +500,8 @@ function createMainWindow(): BrowserWindow {
 // ============================================================
 
 function activateBmadRole(workflowId: string, role: BmadRole, initialMessage?: string): void {
-  const command = BMAD_SLASH_COMMANDS[role]
-  if (!command) return
+  const commands = BMAD_SLASH_COMMANDS[role]
+  if (!commands) return
 
   const projectPath = workflowProjectPaths.get(workflowId)
   if (!projectPath) return
@@ -358,9 +512,20 @@ function activateBmadRole(workflowId: string, role: BmadRole, initialMessage?: s
     return
   }
 
-  console.log(`[BMAD] Activating role ${role}: ${command}`)
-  // 若携带初始指令，通过 $ARGUMENTS 注入到命令模板中一次性发送
-  ptyManager.write(sessionId, initialMessage ? `${command} ${initialMessage}\r` : `${command}\r`)
+  // 支持单个命令或命令数组
+  const cmdList = Array.isArray(commands) ? commands : [commands]
+
+  console.log(`[BMAD] Activating role ${role}: ${cmdList.join(" → ")}`)
+
+  // 依次发送命令，中间加入短暂延迟确保前一条执行完成
+  cmdList.forEach((cmd, index) => {
+    setTimeout(() => {
+      const data = initialMessage && index === 0
+        ? `${cmd} ${initialMessage}\r`
+        : `${cmd}\r`
+      ptyManager.write(sessionId, data)
+    }, index * 500)  // 每条命令间隔 500ms
+  })
 }
 
 // ============================================================
@@ -392,14 +557,10 @@ function registerDepHandlers(): void {
     return { node, npm, claude, codex, gemini, uvx: uvxOk, allInOne }
   })
 
-  // 通用 npm 全局安装工具函数
+  // 通用 npm 全局安装工具函数（复用 runLoginShell 保证跨平台一致性）
   const npmInstall = async (pkg: string) => {
-    const shell = process.env["SHELL"] ?? "/bin/zsh"
     try {
-      await execAsync(`${shell} -l -c "npm install -g ${pkg}"`, {
-        env: { ...process.env, PATH: EXTENDED_PATH },
-        timeout: 120_000,
-      })
+      await runLoginShell(`npm install -g ${pkg}`, 120_000)
       return { ok: true }
     } catch (err: unknown) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -424,6 +585,9 @@ function registerInstallerHandlers(): void {
     const absPath     = path.resolve(req.projectPath.trim())
     const projectName = req.projectName ?? path.basename(absPath)
 
+    // 目录不存在时自动创建
+    await fs.mkdir(absPath, { recursive: true })
+
     // 直接从 GitHub 下载 BMAD-METHOD 工作流文件，无需 npx
     const result = await bmadInstaller.install(absPath, projectName)
     return {
@@ -443,8 +607,11 @@ function registerInstallerHandlers(): void {
 }
 
 function registerPtyHandlers(): void {
-  ipcMain.handle(IPC.PTY_SPAWN, (_e, req: PtySpawnRequest) => {
+  ipcMain.handle(IPC.PTY_SPAWN, async (_e, req: PtySpawnRequest) => {
     const absPath = path.resolve(req.cwd)
+
+    // 目录不存在时自动创建（支持多级路径）
+    await fs.mkdir(absPath, { recursive: true })
 
     // 清理旧的 sessionId 映射
     for (const [p, sid] of projectSessionMap.entries()) {
@@ -453,14 +620,19 @@ function registerPtyHandlers(): void {
     projectSessionMap.set(absPath, req.sessionId)
 
     // 构建环境变量：确保 PATH 不被 req.env 覆盖
-    const baseEnv = { ...process.env, PATH: EXTENDED_PATH }
-    const finalEnv = req.env
+    const merged = req.env
       ? {
-        ...baseEnv,
+        ...process.env,
+        PATH: EXTENDED_PATH,
         // Windows 环境变量键大小写不敏感，需移除所有 PATH 变体
         ...Object.fromEntries(Object.entries(req.env).filter(([k]) => !/^path$/i.test(k))),
       }
-      : baseEnv
+      : { ...process.env, PATH: EXTENDED_PATH }
+
+    // process.env 的类型包含 undefined 值，node-pty native 层收到 undefined 会触发 posix_spawnp EINVAL
+    const finalEnv = Object.fromEntries(
+      Object.entries(merged).filter((e): e is [string, string] => e[1] != null)
+    )
 
     const session = ptyManager.spawn(req.sessionId, {
       cwd: absPath,  // 使用规范化的绝对路径
@@ -511,6 +683,29 @@ function registerDialogHandlers(): void {
   })
 }
 
+function registerFsHandlers(): void {
+  // 列出单层目录内容（懒加载，点击展开时调用）
+  ipcMain.handle(IPC.FS_LIST_DIR, async (_e, dirPath: string): Promise<FsEntry[]> => {
+    try {
+      const entries = await fs.readdir(dirPath, { withFileTypes: true })
+      return entries
+        .filter(e => !e.name.startsWith("."))   // 隐藏文件默认不显示
+        .map(e => ({
+          name:  e.name,
+          path:  path.join(dirPath, e.name),
+          isDir: e.isDirectory(),
+        }))
+        .sort((a, b) => {
+          // 文件夹优先，再按名称字母序
+          if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+          return a.name.localeCompare(b.name)
+        })
+    } catch {
+      return []
+    }
+  })
+}
+
 function registerStorageHandlers(): void {
   ipcMain.handle(IPC.STORAGE_LIST_PROJECTS, (): StorageProjectItem[] => {
     return storage.listProjects().map(p => ({
@@ -518,12 +713,18 @@ function registerStorageHandlers(): void {
       name:      p.name,
       path:      p.path,
       updatedAt: p.updatedAt,
+      isPlain:   p.isPlain,
       lastRole:  storage.getLatestRoleForProject(p.id) ?? undefined,
     }))
   })
 
   ipcMain.handle(IPC.STORAGE_DELETE_PROJECT, (_e, projectPath: string): void => {
     storage.deleteProject(projectPath)
+  })
+
+  ipcMain.handle(IPC.STORAGE_UPSERT_PROJECT, (_e, req: StorageUpsertProjectRequest): void => {
+    const now = Date.now()
+    storage.createProject({ id: req.id, name: req.name, path: req.path, isPlain: req.isPlain, createdAt: now, updatedAt: now })
   })
 }
 
@@ -569,9 +770,13 @@ function registerWorkflowHandlers(): void {
 // App 生命周期
 // ============================================================
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // 启动时加载系统 PATH（确保 PTY 能访问 shell 配置的所有命令）
+  await loadSystemPath()
+
   registerCoreHandlers()
   registerDialogHandlers()
+  registerFsHandlers()
   registerStorageHandlers()
   registerInstallerHandlers()
   registerDepHandlers()
@@ -585,9 +790,11 @@ app.whenReady().then(() => {
 })
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") shutdown()
+  // macOS 关闭最后一个窗口不退出应用，其他平台直接退出
+  if (process.platform !== "darwin") app.quit()
 })
 
+// before-quit 在任何平台退出前都会触发，统一在此做资源清理
 app.on("before-quit", shutdown)
 
 function shutdown(): void {
@@ -596,5 +803,4 @@ function shutdown(): void {
   storage.close()
   workflowProjectPaths.clear()
   projectSessionMap.clear()
-  if (process.platform !== "darwin") app.quit()
 }

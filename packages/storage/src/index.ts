@@ -14,6 +14,7 @@ export interface ProjectRecord {
   path:      string
   createdAt: number
   updatedAt: number
+  isPlain?:  boolean  // true 表示普通任务（无 BMAD 工作流）
 }
 
 interface WorkflowRunRecord {

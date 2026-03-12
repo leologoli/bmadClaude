@@ -9,9 +9,10 @@ import type { BmadRole } from "@bmad-claude/ipc-contracts"
 // 常量
 // ============================================================
 
-const BMAD_REPO   = "bmad-code-org/BMAD-METHOD"
-const BMAD_BRANCH = "main"
-const CACHE_DIR   = path.join(os.homedir(), ".bmad-claude", "agents")
+const BMAD_REPO       = "bmad-code-org/BMAD-METHOD"
+const BMAD_BRANCH     = "main"
+const CACHE_DIR       = path.join(os.homedir(), ".bmad-claude", "agents")
+const BMAD_CACHE_ROOT = path.join(os.homedir(), ".bmad-claude", "bmad-cache")
 
 // ── 需要从 GitHub 下载并安装到 _bmad/ 的目录前缀 ──
 // src/core/ 包含：agents、tasks（含 workflow.xml）、workflows
@@ -57,9 +58,44 @@ const CLAUDE_COMMANDS: ClaudeCommand[] = [
     loadMd:      "_bmad/bmm/workflows/3-solutioning/create-architecture/workflow.md",
   },
   {
+    name:        "bmad-create-epics-and-stories",
+    description: "Break requirements into epics and user stories. Use when user says 'create the epics and stories list'.",
+    loadMd:      "_bmad/bmm/workflows/3-solutioning/create-epics-and-stories/workflow.md",
+  },
+  {
+    name:        "bmad-check-implementation-readiness",
+    description: "Validate PRD, UX, Architecture and Epics specs are complete. Use when user says 'check implementation readiness'.",
+    loadMd:      "_bmad/bmm/workflows/3-solutioning/check-implementation-readiness/workflow.md",
+  },
+  {
+    name:        "bmad-sprint-planning",
+    description: "Generate sprint status tracking from epics. Use when user says 'run sprint planning' or 'generate sprint plan'.",
+    loadMd:      "_bmad/bmm/workflows/4-implementation/sprint-planning/workflow.md",
+  },
+  {
+    name:        "bmad-create-story",
+    description: "Creates a dedicated story file with all the context the agent will need to implement it later. Use when user says 'create the next story' or 'create story [story identifier]'.",
+    loadMd:      "_bmad/bmm/workflows/4-implementation/create-story/workflow.md",
+  },
+  {
     name:        "bmad-bmm-dev-story",
     description: "Execute story implementation following a context filled story spec file. Use when user says 'dev this story [story file]' or 'implement the next story'.",
     yamlPath:    "_bmad/bmm/workflows/4-implementation/dev-story/workflow.yaml",
+  },
+  {
+    name:        "bmad-code-review",
+    description: "Perform adversarial code review finding specific issues. Use when user says 'run code review' or 'review this code'.",
+    loadMd:      "_bmad/bmm/workflows/4-implementation/code-review/workflow.md",
+  },
+  {
+    name:        "bmad-retrospective",
+    description: "Post-epic review to extract lessons and assess success. Use when user says 'run a retrospective' or 'lets retro the epic [epic]'.",
+    loadMd:      "_bmad/bmm/workflows/4-implementation/retrospective/workflow.md",
+  },
+  {
+    name:        "bmad-correct-course",
+    description: "Manage significant changes during sprint execution. Use when user says 'correct course' or 'propose sprint change'.",
+    loadMd:      "_bmad/bmm/workflows/4-implementation/correct-course/workflow.md",
   },
   {
     name:        "bmad-bmm-qa-generate-e2e-tests",
@@ -127,6 +163,7 @@ function buildCommandContent(cmd: ClaudeCommand): string {
 // ============================================================
 
 interface GithubFile { path: string; type: string }
+interface GithubTree { sha: string; tree: GithubFile[] }
 
 export class BmadInstaller {
   /**
@@ -145,22 +182,34 @@ export class BmadInstaller {
       await fs.mkdir(projectPath, { recursive: true })
 
       // ── 1. 获取完整文件树（单次 API 调用）──
-      const tree = await this.fetchTree()
-      if (!tree) return { ok: false, error: "无法连接 GitHub，请检查网络" }
+      const treeData = await this.fetchTree()
+      if (!treeData) return { ok: false, error: "无法连接 GitHub，请检查网络" }
+      const { sha, tree } = treeData
 
       // ── 2. 筛选需要安装的文件 ──
       const toInstall = tree
         .filter(f => f.type === "blob" && INSTALL_PREFIXES.some(p => f.path.startsWith(p)))
         .map(f => ({
           src:  f.path,
-          // src/bmm/... → _bmad/bmm/...  |  src/core/... → _bmad/core/...
+          rel:  f.path.slice("src/".length),                              // 缓存内相对路径
           dest: path.join(projectPath, "_bmad", f.path.slice("src/".length)),
         }))
 
-      console.log(`[BMAD-INSTALL] Downloading ${toInstall.length} files to ${projectPath}`)
-
-      // ── 3. 并发下载 + 写入（每批 20 个并发）──
-      await this.downloadBatch(toInstall)
+      // ── 3. 命中缓存则直接复制；未命中则下载并同步回填缓存 ──
+      const cacheDir = path.join(BMAD_CACHE_ROOT, sha)
+      if (await this.hasCompleteCache(cacheDir)) {
+        console.log(`[BMAD-INSTALL] Cache hit: ${sha}`)
+        await this.copyFromCache(cacheDir, toInstall)
+      } else {
+        console.log(`[BMAD-INSTALL] Downloading ${toInstall.length} files (sha: ${sha})`)
+        // 清除残缺的旧缓存，确保本次写入干净
+        await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => {})
+        await fs.mkdir(cacheDir, { recursive: true })
+        await this.downloadBatch(toInstall, cacheDir)
+        // 所有文件写完后打哨兵，标记缓存完整
+        await fs.writeFile(path.join(cacheDir, ".complete"), sha, "utf-8")
+          .catch(e => console.warn("[BMAD-INSTALL] Cache sentinel write failed:", e))
+      }
 
       // ── 4. 生成 .claude/commands/ 命令文件（本地模板，无需网络）──
       const commandsDir = path.join(projectPath, ".claude", "commands")
@@ -184,30 +233,60 @@ export class BmadInstaller {
   }
 
   // ── 获取仓库文件树（单次 API 请求）──
-  private async fetchTree(): Promise<GithubFile[] | null> {
+  private async fetchTree(): Promise<GithubTree | null> {
     const url = `https://api.github.com/repos/${BMAD_REPO}/git/trees/${BMAD_BRANCH}?recursive=1`
     const raw  = await httpsGet(url)
     if (!raw) return null
     try {
-      const data = JSON.parse(raw) as { tree?: GithubFile[] }
-      return data.tree ?? null
+      const data = JSON.parse(raw) as { sha?: string; tree?: GithubFile[] }
+      if (typeof data.sha !== "string" || !Array.isArray(data.tree)) return null
+      return { sha: data.sha, tree: data.tree }
     } catch { return null }
   }
 
-  // ── 批量并发下载（每批最多 20 个）──
+  // ── 批量并发下载；同步写入 cacheDir（传 null 则不缓存）──
   private async downloadBatch(
-    files: Array<{ src: string; dest: string }>,
+    files: Array<{ src: string; rel: string; dest: string }>,
+    cacheDir: string | null = null,
     concurrency = 20,
   ): Promise<void> {
     for (let i = 0; i < files.length; i += concurrency) {
       const batch = files.slice(i, i + concurrency)
-      await Promise.all(batch.map(async ({ src, dest }) => {
+      await Promise.all(batch.map(async ({ src, rel, dest }) => {
         const url     = `https://raw.githubusercontent.com/${BMAD_REPO}/${BMAD_BRANCH}/${src}`
         const content = await httpsGet(url)
         if (content !== null) {
           await fs.mkdir(path.dirname(dest), { recursive: true })
           await fs.writeFile(dest, content, "utf-8")
+          // 下载成功时同步写入缓存（与 dest 同内容，避免回拷遗漏失败文件）
+          if (cacheDir) {
+            const cacheDest = path.join(cacheDir, rel)
+            await fs.mkdir(path.dirname(cacheDest), { recursive: true })
+            await fs.writeFile(cacheDest, content, "utf-8")
+          }
         }
+      }))
+    }
+  }
+
+  // ── 缓存完整性检查（以 .complete 哨兵文件为准）──
+  private async hasCompleteCache(cacheDir: string): Promise<boolean> {
+    try { await fs.access(path.join(cacheDir, ".complete")); return true }
+    catch { return false }
+  }
+
+  // ── 从缓存复制到项目目录 ──
+  private async copyFromCache(
+    cacheDir: string,
+    files: Array<{ rel: string; dest: string }>,
+    concurrency = 20,
+  ): Promise<void> {
+    for (let i = 0; i < files.length; i += concurrency) {
+      const batch = files.slice(i, i + concurrency)
+      await Promise.all(batch.map(async ({ rel, dest }) => {
+        const src = path.join(cacheDir, rel)
+        await fs.mkdir(path.dirname(dest), { recursive: true })
+        await fs.copyFile(src, dest)
       }))
     }
   }

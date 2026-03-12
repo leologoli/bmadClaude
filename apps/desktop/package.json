@@ -50,14 +50,18 @@
       "out/**/*",
       "!out/**/*.map"
     ],
+    "afterPack": "./build/afterPack.cjs",
     "mac": {
       "icon": "build/icon.icns",
+      "identity": null,
       "target": [
         { "target": "dmg", "arch": ["arm64", "x64"] }
       ]
     },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
     },
     "linux": {
       "target": ["AppImage", "deb"]
