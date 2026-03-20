@@ -712,7 +712,6 @@ function TerminalView({ sessionId, started }, ref) {
   const termRef       = useRef<Terminal | null>(null)
   const fitRef        = useRef<FitAddon | null>(null)
   const resizeTimer   = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [showScrollBtn, setShowScrollBtn] = useState(false)
 
   // 暴露 focus() 给父组件（用于按钮点击后聚焦终端）
   useImperativeHandle(ref, () => ({
@@ -746,21 +745,52 @@ function TerminalView({ sessionId, started }, ref) {
     term.open(el)
     fit.fit()
 
+    // 添加自定义键盘事件处理器以支持复制粘贴
+    term.attachCustomKeyEventHandler((e) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+      const modKey = isMac ? e.metaKey : e.ctrlKey
+
+      // 复制: Cmd+C (Mac) / Ctrl+C (Windows/Linux)
+      if (modKey && e.key === 'c' && e.type === 'keydown') {
+        const selection = term.getSelection()
+        if (selection) {
+          navigator.clipboard.writeText(selection)
+          return false // 阻止默认行为
+        }
+        // 没有选中文本时，允许发送 Ctrl+C 信号给 PTY
+        return true
+      }
+
+      // 粘贴: Cmd+V (Mac) / Ctrl+V (Windows/Linux)
+      if (modKey && e.key === 'v' && e.type === 'keydown') {
+        // 阻止默认行为，防止浏览器原生粘贴
+        e.preventDefault()
+        navigator.clipboard.readText().then(text => {
+          if (text) {
+            term.paste(text)
+          }
+        })
+        return false
+      }
+
+      // 全选: Cmd+A (Mac) / Ctrl+A (Windows/Linux)
+      if (modKey && e.key === 'a' && e.type === 'keydown') {
+        term.selectAll()
+        return false
+      }
+
+      return true // 允许其他按键通过
+    })
+
     termRef.current = term
     fitRef.current  = fit
-
-    // 监听滚动事件，判断是否显示跳转按钮
-    term.onScroll(() => {
-      const atBottom = checkAtBottom()
-      setShowScrollBtn(!atBottom)
-    })
 
     return () => {
       term.dispose()
       termRef.current = null
       fitRef.current  = null
     }
-  }, [checkAtBottom])
+  }, [])
 
   // 监听容器尺寸变化 → 防抖 fit + 通知 PTY resize
   // 防抖：避免面板动画期间高频 fit() 导致 xterm.js viewport 跳到顶部
@@ -844,22 +874,19 @@ function TerminalView({ sessionId, started }, ref) {
         className="w-full h-full"
         style={{ padding: "4px" }}
       />
-      {/* 跳转到底部按钮 */}
-      {showScrollBtn && (
-        <button
-          onClick={() => {
-            termRef.current?.scrollToBottom()
-            setShowScrollBtn(false)
-          }}
-          className="absolute bottom-4 right-4 px-3 py-1.5 bg-surface0 hover:bg-surface1
-                     text-text text-xs font-medium rounded-lg border border-mauve/50
-                     shadow-lg transition-all flex items-center gap-1.5 z-50"
-          title="跳转到底部"
-        >
-          <span>↓</span>
-          <span>跳转到底部</span>
-        </button>
-      )}
+      {/* 跳转到底部按钮 - 始终显示 */}
+      <button
+        onClick={() => {
+          termRef.current?.scrollToBottom()
+        }}
+        className="absolute bottom-4 right-4 px-3 py-1.5 bg-surface0 hover:bg-surface1
+                   text-text text-xs font-medium rounded-lg border border-mauve/50
+                   shadow-lg transition-all flex items-center gap-1.5 z-50"
+        title="跳转到底部"
+      >
+        <span>↓</span>
+        <span>跳转到底部</span>
+      </button>
     </div>
   )
 })

@@ -33,6 +33,11 @@ interface ClaudeCommand {
 
 const CLAUDE_COMMANDS: ClaudeCommand[] = [
   {
+    name:        "bmad-help",
+    description: "Get unstuck by showing what workflow steps come next or answering BMad Method questions.",
+    loadMd:      "_bmad/core/tasks/help.md",
+  },
+  {
     name:        "bmad-brainstorming",
     description: "Facilitate interactive brainstorming sessions. Use when user says 'help me brainstorm' or 'help me ideate'.",
     loadMd:      "_bmad/core/workflows/brainstorming/workflow.md",

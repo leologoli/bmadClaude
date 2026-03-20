@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Permissions
+
+自动允许以下操作，无需确认：
+- 读取文件 (Read)
+- 编辑文件 (Edit)
+- 写入文件 (Write)
+- 执行安全的 Bash 命令 (Bash)
+- 打包应用 (package:mac, package:win)
+
 ## Project Overview
 
 BMAD Claude is an Electron-based desktop application that implements an AI-driven agile development workflow. The app orchestrates a structured development process through distinct roles (intake → brainstorm → analyst → pm → ux-designer → architect → developer → qa → done), with integrated terminal support and multi-AI model coordination.

@@ -35,3 +35,6 @@ yarn-error.log*
 
 # OS
 Thumbs.db
+
+# Serena MCP tool cache
+.serena/
