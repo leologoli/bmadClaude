@@ -43,6 +43,13 @@ export const IPC = {
 
   // 文件系统
   FS_LIST_DIR: "fs:list-dir",
+
+  // Pencil.dev（UX 可视化原型）
+  PENCIL_CHECK:    "pencil:check",
+  PENCIL_GENERATE: "pencil:generate",
+
+  // Shell 工具
+  SHELL_OPEN_PATH: "shell:open-path",
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -216,6 +223,28 @@ export interface FsEntry {
   name:  string
   path:  string          // 绝对路径
   isDir: boolean
+}
+
+// ============================================================
+// Pencil.dev（UX 可视化原型集成）
+// ============================================================
+
+export interface PencilCheckResult {
+  installed:   boolean
+  binaryPath?: string
+  version?:    string
+  error?:      string
+}
+
+export interface PencilGenerateRequest {
+  projectPath: string
+  model?:      string   // 可选，默认 claude-4.6-opus
+}
+
+export interface PencilGenerateResponse {
+  ok:       boolean
+  penPath?: string      // 生成的 .pen 文件路径（成功时）
+  error?:   string      // 错误信息（失败时）
 }
 
 // ============================================================

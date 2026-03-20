@@ -87,6 +87,9 @@ export default function App() {
   const [isPlain, setIsPlain]           = useState(false)  // 普通任务模式（无 BMAD 工作流）
   const [showExitConfirm, setShowExitConfirm]     = useState(false)
   const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false)
+  // Pencil.dev 原型生成状态
+  const [uxProtoStatus, setUxProtoStatus] = useState<"idle" | "running" | "done" | "failed" | "skipped">("idle")
+  const [uxPenPath, setUxPenPath]         = useState<string | null>(null)
   const pendingInputRef = useRef<HTMLInputElement>(null)
   const terminalRef     = useRef<TerminalHandle>(null)
 
@@ -317,6 +320,27 @@ export default function App() {
   async function handleNext() {
     if (!snapshot) return
     await window.bmad.workflow.sendEvent({ workflowId, event: { type: "NEXT" } })
+  }
+
+  // ── Pencil.dev：生成 UX 交互原型 ──
+  async function handlePencilGenerate() {
+    setUxProtoStatus("running")
+    try {
+      const res = await window.bmad.pencil.generate({ projectPath })
+      if (res.ok && res.penPath) {
+        setUxPenPath(res.penPath)
+        setUxProtoStatus("done")
+      } else {
+        setUxProtoStatus("failed")
+      }
+    } catch {
+      setUxProtoStatus("failed")
+    }
+  }
+
+  // ── Pencil.dev：用系统默认应用打开 .pen 文件 ──
+  async function handlePencilOpenFile() {
+    if (uxPenPath) await window.bmad.shell.openPath(uxPenPath)
   }
 
   // ── 手动切换角色 ──
@@ -595,6 +619,17 @@ export default function App() {
           })}
         </nav>
 
+        {/* Pencil.dev 原型面板：仅在 ux-designer 阶段显示 */}
+        {started && snapshot?.currentRole === "ux-designer" && (
+          <PencilPrototypePanel
+            uxProtoStatus={uxProtoStatus}
+            penPath={uxPenPath}
+            onGenerate={() => void handlePencilGenerate()}
+            onSkip={() => { setUxProtoStatus("skipped"); void handleNext() }}
+            onOpenInPencil={() => void handlePencilOpenFile()}
+          />
+        )}
+
         <div className="p-3 border-t border-surface0 flex flex-col gap-2">
           {started && snapshot && snapshot.currentRole !== "done" && (
             <button
@@ -696,6 +731,184 @@ export default function App() {
           <FileBrowser isOpen={isFileBrowserOpen} onClose={() => setIsFileBrowserOpen(false)} rootPath={projectPath} />
         </div>
       </main>
+    </div>
+  )
+}
+
+// ============================================================
+// Pencil.dev 原型面板组件
+// ============================================================
+
+type UxProtoStatus = "idle" | "running" | "done" | "failed" | "skipped"
+
+function PencilPrototypePanel({
+  uxProtoStatus,
+  penPath,
+  onGenerate,
+  onSkip,
+  onOpenInPencil,
+}: {
+  uxProtoStatus: UxProtoStatus
+  penPath:       string | null
+  onGenerate:    () => void
+  onSkip:        () => void
+  onOpenInPencil:() => void
+}) {
+  const [checking,   setChecking]   = useState(true)
+  const [installed,  setInstalled]  = useState(false)
+
+  // 进入 ux-designer 阶段时检测 Pencil CLI
+  useEffect(() => {
+    let mounted = true
+    window.bmad.pencil.check()
+      .then(r => { if (mounted) setInstalled(r.installed) })
+      .catch(() => { if (mounted) setInstalled(false) })
+      .finally(() => { if (mounted) setChecking(false) })
+    return () => { mounted = false }
+  }, [])
+
+  // 用户主动跳过后隐藏面板
+  if (uxProtoStatus === "skipped") return null
+
+  return (
+    <div className="mx-2 mb-2 rounded-lg bg-surface0/40 border border-surface0 p-3 text-xs flex flex-col gap-2.5">
+      {/* 面板标题 */}
+      <div className="flex items-center gap-1.5 text-subtext font-semibold">
+        <span>🖼️</span>
+        <span>可视化原型</span>
+        <span className="ml-auto text-overlay0 font-normal">by Pencil.dev</span>
+      </div>
+
+      {/* 检测中 */}
+      {checking && (
+        <p className="text-overlay0 animate-pulse">检测 Pencil.dev...</p>
+      )}
+
+      {/* 未安装 */}
+      {!checking && !installed && (
+        <div className="flex flex-col gap-2">
+          <p className="text-yellow font-medium">⚠ 需要 Pencil.dev 桌面应用</p>
+          <p className="text-overlay0 leading-relaxed">
+            安装后，在 Pencil.dev 中执行<br />
+            <span className="text-subtext font-mono">File → Install pencil command into PATH</span>
+          </p>
+          <div className="flex gap-1.5 mt-0.5">
+            <a
+              href="https://pencil.dev"
+              target="_blank"
+              rel="noreferrer"
+              className="flex-1 py-1.5 text-center rounded-md bg-yellow/20 border border-yellow/40 text-yellow hover:bg-yellow/30 transition-colors"
+            >
+              下载 Pencil.dev
+            </a>
+            <button
+              onClick={onSkip}
+              className="flex-1 py-1.5 rounded-md bg-surface0 text-overlay0 hover:text-text transition-colors"
+            >
+              跳过
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 已安装 + 各状态 */}
+      {!checking && installed && (
+        <>
+          {uxProtoStatus === "idle" && (
+            <div className="flex flex-col gap-2">
+              <p className="text-overlay0">将 UX 规格转换为可交互原型</p>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={onGenerate}
+                  className="flex-[2] py-1.5 rounded-md bg-mauve/20 border border-mauve/40 text-mauve hover:bg-mauve/30 transition-colors font-medium"
+                >
+                  ✨ 生成原型
+                </button>
+                <button
+                  onClick={onSkip}
+                  className="flex-1 py-1.5 rounded-md bg-surface0 text-overlay0 hover:text-text transition-colors"
+                >
+                  跳过
+                </button>
+              </div>
+            </div>
+          )}
+
+          {uxProtoStatus === "running" && (
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-1.5 pl-2 border-l-2 border-surface0">
+                <div className="flex items-center gap-1.5 text-green">
+                  <span>✓</span>
+                  <span>初始化 .pen 画布...</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-lavender animate-pulse">
+                  <span>◉</span>
+                  <span>启动 Pencil AI 设计...</span>
+                </div>
+              </div>
+              <button
+                onClick={onSkip}
+                className="py-1.5 rounded-md bg-surface0 text-overlay0 hover:text-red transition-colors"
+              >
+                取消
+              </button>
+            </div>
+          )}
+
+          {uxProtoStatus === "done" && (
+            <div className="flex flex-col gap-2">
+              <p className="text-green font-medium">✓ 原型已在 Pencil.dev 中打开</p>
+              {penPath && (
+                <p className="text-overlay0 font-mono truncate" title={penPath}>
+                  {penPath.split("/").slice(-2).join("/")}
+                </p>
+              )}
+              <div className="flex gap-1.5">
+                <button
+                  onClick={onOpenInPencil}
+                  className="flex-[2] py-1.5 rounded-md bg-lavender/20 border border-lavender/40 text-lavender hover:bg-lavender/30 transition-colors"
+                >
+                  在 Pencil.dev 查看
+                </button>
+                <button
+                  onClick={onGenerate}
+                  className="flex-1 py-1.5 rounded-md bg-surface0 text-overlay0 hover:text-text transition-colors"
+                >
+                  重新生成
+                </button>
+              </div>
+              <div className="h-px bg-surface0 my-0.5" />
+              <button
+                onClick={onSkip}
+                className="py-1.5 rounded-md bg-green/20 border border-green/40 text-green font-semibold hover:bg-green/30 transition-colors"
+              >
+                ✅ 确认原型，进入架构设计
+              </button>
+            </div>
+          )}
+
+          {uxProtoStatus === "failed" && (
+            <div className="flex flex-col gap-2">
+              <p className="text-red font-medium">✕ 生成失败</p>
+              <p className="text-overlay0">请检查 Pencil CLI 授权状态</p>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={onGenerate}
+                  className="flex-[2] py-1.5 rounded-md bg-red/20 border border-red/40 text-red hover:bg-red/30 transition-colors"
+                >
+                  重试
+                </button>
+                <button
+                  onClick={onSkip}
+                  className="flex-1 py-1.5 rounded-md bg-surface0 text-overlay0 hover:text-text transition-colors"
+                >
+                  跳过
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -1647,6 +1860,13 @@ declare global {
   interface Window {
     bmad: {
       ping: (req: import("@bmad-claude/ipc-contracts").PingRequest) => Promise<import("@bmad-claude/ipc-contracts").PingResponse>
+      pencil: {
+        check:    () => Promise<import("@bmad-claude/ipc-contracts").PencilCheckResult>
+        generate: (req: import("@bmad-claude/ipc-contracts").PencilGenerateRequest) => Promise<import("@bmad-claude/ipc-contracts").PencilGenerateResponse>
+      }
+      shell: {
+        openPath: (filePath: string) => Promise<void>
+      }
       deps: {
         check:         () => Promise<import("@bmad-claude/ipc-contracts").DepCheckResult>
         installClaude:    () => Promise<{ ok: boolean; error?: string }>
