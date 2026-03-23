@@ -4,12 +4,11 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@bmad-claude/ipc-contracts":   ["../../packages/ipc-contracts/src/index.ts"],
-      "@bmad-claude/pty-bridge":      ["../../packages/pty-bridge/src/index.ts"],
+      "@bmad-claude/ipc-contracts": ["../../packages/ipc-contracts/src/index.ts"],
+      "@bmad-claude/pty-bridge": ["../../packages/pty-bridge/src/index.ts"],
       "@bmad-claude/workflow-engine": ["../../packages/workflow-engine/src/index.ts"],
-      "@bmad-claude/bmad-registry":   ["../../packages/bmad-registry/src/index.ts"],
-      "@bmad-claude/storage":         ["../../packages/storage/src/index.ts"],
-      "@bmad-claude/pencil-bridge":   ["../../packages/pencil-bridge/src/index.ts"]
+      "@bmad-claude/bmad-registry": ["../../packages/bmad-registry/src/index.ts"],
+      "@bmad-claude/storage": ["../../packages/storage/src/index.ts"]
     }
   },
   "include": ["electron", "src"],

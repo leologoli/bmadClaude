@@ -11,17 +11,15 @@ const WORKSPACE_PKGS = [
   "@bmad-claude/workflow-engine",
   "@bmad-claude/bmad-registry",
   "@bmad-claude/storage",
-  "@bmad-claude/pencil-bridge",
 ]
 
 // alias：将 workspace 包映射到 TypeScript 源文件，由 vite 编译打包
 const workspaceAlias = {
-  "@bmad-claude/ipc-contracts":   path.resolve(__dirname, "../../packages/ipc-contracts/src/index.ts"),
-  "@bmad-claude/pty-bridge":      path.resolve(__dirname, "../../packages/pty-bridge/src/index.ts"),
-  "@bmad-claude/workflow-engine": path.resolve(__dirname, "../../packages/workflow-engine/src/index.ts"),
-  "@bmad-claude/bmad-registry":   path.resolve(__dirname, "../../packages/bmad-registry/src/index.ts"),
-  "@bmad-claude/storage":         path.resolve(__dirname, "../../packages/storage/src/index.ts"),
-  "@bmad-claude/pencil-bridge":   path.resolve(__dirname, "../../packages/pencil-bridge/src/index.ts"),
+  "@bmad-claude/ipc-contracts":  path.resolve(__dirname, "../../packages/ipc-contracts/src/index.ts"),
+  "@bmad-claude/pty-bridge":     path.resolve(__dirname, "../../packages/pty-bridge/src/index.ts"),
+  "@bmad-claude/workflow-engine":path.resolve(__dirname, "../../packages/workflow-engine/src/index.ts"),
+  "@bmad-claude/bmad-registry":  path.resolve(__dirname, "../../packages/bmad-registry/src/index.ts"),
+  "@bmad-claude/storage":        path.resolve(__dirname, "../../packages/storage/src/index.ts"),
 }
 
 export default defineConfig({

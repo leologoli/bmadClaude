@@ -3,9 +3,6 @@ import {
   IPC,
   type BmadInstallRequest,
   type DepCheckResult,
-  type PencilCheckResult,
-  type PencilGenerateRequest,
-  type PencilGenerateResponse,
   type PingRequest,
   type PtyKillRequest,
   type PtyResizeRequest,
@@ -53,18 +50,6 @@ const api = {
   // 文件系统（懒加载目录内容）
   fs: {
     listDir: (dirPath: string): Promise<FsEntry[]> => ipcRenderer.invoke(IPC.FS_LIST_DIR, dirPath),
-  },
-
-  // Pencil.dev（UX 可视化原型）
-  pencil: {
-    check:    (): Promise<PencilCheckResult>       => ipcRenderer.invoke(IPC.PENCIL_CHECK),
-    generate: (req: PencilGenerateRequest): Promise<PencilGenerateResponse> =>
-      ipcRenderer.invoke(IPC.PENCIL_GENERATE, req),
-  },
-
-  // Shell 工具
-  shell: {
-    openPath: (filePath: string): Promise<void> => ipcRenderer.invoke(IPC.SHELL_OPEN_PATH, filePath),
   },
 
   // BMAD-METHOD 安装器

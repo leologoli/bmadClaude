@@ -15,11 +15,10 @@
     "package:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
-    "@bmad-claude/bmad-registry":   "workspace:*",
-    "@bmad-claude/ipc-contracts":   "workspace:*",
-    "@bmad-claude/pencil-bridge":   "workspace:*",
-    "@bmad-claude/pty-bridge":      "workspace:*",
-    "@bmad-claude/storage":         "workspace:*",
+    "@bmad-claude/bmad-registry": "workspace:*",
+    "@bmad-claude/ipc-contracts": "workspace:*",
+    "@bmad-claude/pty-bridge": "workspace:*",
+    "@bmad-claude/storage": "workspace:*",
     "@bmad-claude/workflow-engine": "workspace:*",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",

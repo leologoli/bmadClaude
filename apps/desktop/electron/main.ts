@@ -4,13 +4,12 @@ import fsSync from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
-import { BrowserWindow, app, dialog, ipcMain, shell } from "electron"
+import { BrowserWindow, app, dialog, ipcMain } from "electron"
 import {
   IPC,
   type BmadRole,
   type BmadInstallRequest,
   type FsEntry,
-  type PencilGenerateRequest,
   type PingRequest,
   type PtyKillRequest,
   type PtyResizeRequest,
@@ -22,7 +21,6 @@ import {
   type StorageUpsertProjectRequest,
 } from "@bmad-claude/ipc-contracts"
 import { BmadInstaller } from "@bmad-claude/bmad-registry"
-import { PencilBridge } from "@bmad-claude/pencil-bridge"
 import { PtySessionManager } from "@bmad-claude/pty-bridge"
 import { ProjectStorage } from "@bmad-claude/storage"
 import { WorkflowManager } from "@bmad-claude/workflow-engine"
@@ -35,7 +33,6 @@ const ptyManager      = new PtySessionManager()
 const workflowManager = new WorkflowManager()
 const storage         = new ProjectStorage()
 const bmadInstaller   = new BmadInstaller()
-const pencilBridge    = new PencilBridge()
 
 let mainWindow: BrowserWindow | null = null
 
@@ -770,50 +767,6 @@ function registerWorkflowHandlers(): void {
 }
 
 // ============================================================
-// Pencil.dev 处理器
-// ============================================================
-
-function registerPencilHandlers(): void {
-  // 检测 Pencil CLI 是否已安装
-  ipcMain.handle(IPC.PENCIL_CHECK, async () => {
-    return pencilBridge.checkInstalled()
-  })
-
-  // 生成 UX 交互原型（自动发现 UX 规格文件，调用 Pencil CLI）
-  ipcMain.handle(IPC.PENCIL_GENERATE, async (_e, req: PencilGenerateRequest) => {
-    // 基础参数校验
-    const projectPath = typeof req?.projectPath === "string" ? req.projectPath.trim() : ""
-    if (!projectPath) return { ok: false, error: "projectPath 不能为空" }
-    const model = typeof req?.model === "string" && req.model.trim() ? req.model.trim() : undefined
-
-    try {
-      const result = await pencilBridge.generatePrototype({ projectPath, model })
-      return { ok: true, penPath: result.penPath }
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err)
-      console.error("[Pencil] generatePrototype failed:", error)
-      return { ok: false, error }
-    }
-  })
-}
-
-// ============================================================
-// Shell 工具处理器
-// ============================================================
-
-function registerShellHandlers(): void {
-  // 使用系统默认应用打开文件（静态 import，无动态加载开销）
-  ipcMain.handle(IPC.SHELL_OPEN_PATH, async (_e, filePath: string) => {
-    // 仅允许绝对路径，防止意外打开 URL 或相对路径
-    if (typeof filePath !== "string" || !path.isAbsolute(filePath)) {
-      throw new Error("filePath 必须是绝对路径")
-    }
-    const openErr = await shell.openPath(filePath)
-    if (openErr) throw new Error(openErr)
-  })
-}
-
-// ============================================================
 // App 生命周期
 // ============================================================
 
@@ -828,8 +781,6 @@ app.whenReady().then(async () => {
   registerInstallerHandlers()
   registerDepHandlers()
   registerPtyHandlers()
-  registerPencilHandlers()
-  registerShellHandlers()
   registerWorkflowHandlers()
 
   createMainWindow()
