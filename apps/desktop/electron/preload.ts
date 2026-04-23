@@ -32,7 +32,8 @@ const api = {
     installClaude:    (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.DEP_INSTALL_CLAUDE),
     installCodex:     (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.DEP_INSTALL_CODEX),
     installGemini:    (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.DEP_INSTALL_GEMINI),
-    installAllInOne:  (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.DEP_INSTALL_ALL_IN_ONE),
+    installAllInOne:    (): Promise<{ ok: boolean; error?: string }>                     => ipcRenderer.invoke(IPC.DEP_INSTALL_ALL_IN_ONE),
+    installSuperpowers: (req: { projectPath: string }): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.DEP_INSTALL_SUPERPOWERS, req),
   },
 
   // 本地存储

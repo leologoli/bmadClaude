@@ -31,7 +31,8 @@ export const IPC = {
   DEP_INSTALL_CLAUDE:      "dep:install-claude",
   DEP_INSTALL_CODEX:       "dep:install-codex",
   DEP_INSTALL_GEMINI:      "dep:install-gemini",
-  DEP_INSTALL_ALL_IN_ONE:  "dep:install-all-in-one",
+  DEP_INSTALL_ALL_IN_ONE:      "dep:install-all-in-one",
+  DEP_INSTALL_SUPERPOWERS:     "dep:install-superpowers",
 
   // 本地存储
   STORAGE_LIST_PROJECTS:   "storage:list-projects",

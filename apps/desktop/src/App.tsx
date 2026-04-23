@@ -75,12 +75,13 @@ export default function App() {
   const [projectName, setProjectName]   = useState("")
   const [projectPath, setProjectPath]   = useState("")
   const [roleStatus, setRoleStatus]     = useState<string | null>(null)
+  const [showHelp, setShowHelp]         = useState(false)
   const [ptyStatus, setPtyStatus]       = useState<PtyStatus>("disconnected")
   const [installPhase, setInstallPhase] = useState<InstallPhase>("idle")
   const [installError, setInstallError] = useState<string | null>(null)
   const [depResult, setDepResult]       = useState<DepCheckResult | null>(null)
   // 保存 opts 用于错误重试时复原选项
-  const [lastInstallOpts, setLastInstallOpts] = useState<{ installCodex: boolean; installGemini: boolean; installAllInOne: boolean }>({ installCodex: false, installGemini: false, installAllInOne: false })
+  const [lastInstallOpts, setLastInstallOpts] = useState<{ installCodex: boolean; installGemini: boolean; installAllInOne: boolean; installSuperpowers: boolean }>({ installCodex: false, installGemini: false, installAllInOne: false, installSuperpowers: false })
   // 等待输入指令的阶段（点击"开始"后展开输入框）
   const [pendingRole, setPendingRole]   = useState<BmadRole | null>(null)
   const [pendingMsg, setPendingMsg]     = useState("")
@@ -144,7 +145,7 @@ export default function App() {
   }
 
   // ── 普通任务（含可选工具安装）：检查依赖 → 安装可选工具 → 启动 ──
-  async function handlePlainStart(pPath: string, opts: { installCodex: boolean; installGemini: boolean; installAllInOne: boolean }) {
+  async function handlePlainStart(pPath: string, opts: { installCodex: boolean; installGemini: boolean; installAllInOne: boolean; installSuperpowers: boolean }) {
     if (!pPath.trim()) return
     setInstallError(null)
     setDepResult(null)
@@ -185,6 +186,12 @@ export default function App() {
         if (!r.ok) { setInstallError(r.error ?? "All-in-One 环境配置失败"); setInstallPhase("error"); return }
       }
 
+      // 5. Superpowers（项目级 skill，失败不中断流程）
+      if (opts.installSuperpowers) {
+        setInstallPhase("installing-optional")
+        await window.bmad.deps.installSuperpowers({ projectPath: pPath }).catch(() => {})
+      }
+
       setInstallPhase("done")
       await launchPlainSession(pPath)
     } catch (err: unknown) {
@@ -194,7 +201,7 @@ export default function App() {
   }
 
   // ── 新建项目：检查依赖 → 安装 Claude（如缺失）→ 选装 Codex/Gemini → 安装 BMAD → 启动 ──
-  async function handleStart(opts: { installCodex: boolean; installGemini: boolean; installAllInOne: boolean } = { installCodex: false, installGemini: false, installAllInOne: false }) {
+  async function handleStart(opts: { installCodex: boolean; installGemini: boolean; installAllInOne: boolean; installSuperpowers: boolean } = { installCodex: false, installGemini: false, installAllInOne: false, installSuperpowers: false }) {
     if (!projectName.trim() || !projectPath.trim()) return
 
     setInstallError(null)
@@ -244,7 +251,13 @@ export default function App() {
         }
       }
 
-      // 5. 安装 BMAD-METHOD 工作流文件
+      // 5. Superpowers（项目级 skill，失败不中断流程）
+      if (opts.installSuperpowers) {
+        setInstallPhase("installing-optional")
+        await window.bmad.deps.installSuperpowers({ projectPath }).catch(() => {})
+      }
+
+      // 6. 安装 BMAD-METHOD 工作流文件
       setInstallPhase("installing")
       const result = await window.bmad.installer.install({ projectPath, projectName })
       if (!result.ok) {
@@ -353,13 +366,17 @@ export default function App() {
   // ── 项目选择页（启动页，无侧边栏）──
   if (screen === "picker") {
     return (
-      <ProjectPickerScreen
-        projects={projects}
-        onResume={handleResume}
-        onDelete={(item) => void handleDeleteProject(item)}
-        onNew={() => setScreen("intake")}
-        onNewPlain={() => setScreen("plain")}
-      />
+      <>
+        {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+        <ProjectPickerScreen
+          projects={projects}
+          onResume={handleResume}
+          onDelete={(item) => void handleDeleteProject(item)}
+          onNew={() => setScreen("intake")}
+          onNewPlain={() => setScreen("plain")}
+          onHelp={() => setShowHelp(true)}
+        />
+      </>
     )
   }
 
@@ -486,6 +503,7 @@ export default function App() {
   // ── BMAD 会话页（侧边栏 + 终端）──
   return (
     <div className="flex h-screen bg-base text-text font-sans">
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
       {showExitConfirm && (
         <ExitConfirmModal
           onSaveExit={() => void doExit(true)}
@@ -497,9 +515,20 @@ export default function App() {
       {/* ── 左侧：BMAD 工作流面板 ── */}
       <aside className="w-60 flex flex-col bg-mantle border-r border-surface0 shrink-0">
 
-        <div className="px-4 py-4 border-b border-surface0">
-          <h1 className="text-mauve font-bold text-base tracking-tight">云服务流程工具</h1>
-          <p className="text-overlay0 text-xs mt-0.5">AI 驱动的敏捷开发</p>
+        <div className="px-4 py-4 border-b border-surface0 flex items-start justify-between">
+          <div>
+            <h1 className="text-mauve font-bold text-base tracking-tight">云服务流程工具</h1>
+            <p className="text-overlay0 text-xs mt-0.5">AI 驱动的敏捷开发</p>
+          </div>
+          <button
+            onClick={() => setShowHelp(true)}
+            title="使用指南"
+            className="text-overlay0 hover:text-lavender transition-colors text-sm font-semibold
+                       w-6 h-6 rounded-full border border-surface1 hover:border-lavender/50
+                       flex items-center justify-center shrink-0 mt-0.5"
+          >
+            ?
+          </button>
         </div>
 
         <nav className="flex flex-col gap-1 p-2 flex-1 overflow-y-auto">
@@ -536,15 +565,19 @@ export default function App() {
                     <span className="w-1.5 h-1.5 rounded-full bg-mauve shrink-0" />
                   )}
 
-                  {/* 开始按钮：hover 显示，点击展开输入框 */}
+                  {/* 已完成阶段：始终显示"重新进入"；当前/未来阶段：hover 时显示"开始" */}
                   {canSwitch && !isPending && (
                     <button
                       onClick={() => handleRolePending(role)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity
-                                 text-[10px] font-semibold px-1.5 py-0.5 rounded
-                                 border border-mauve/50 text-mauve hover:bg-mauve/10 shrink-0"
+                      className={[
+                        "text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0",
+                        "border transition-opacity",
+                        isDone
+                          ? "opacity-100 border-green/50 text-green hover:bg-green/10"
+                          : "opacity-0 group-hover:opacity-100 border-mauve/50 text-mauve hover:bg-mauve/10",
+                      ].join(" ")}
                     >
-                      开始
+                      {isDone ? "重新进入" : "开始"}
                     </button>
                   )}
 
@@ -558,6 +591,26 @@ export default function App() {
                     </button>
                   )}
                 </div>
+
+                {/* PM 阶段：线框图快捷按钮（当前阶段且未展开输入框时显示）*/}
+                {isCur && role === "pm" && !isPending && (
+                  <div className="px-3 pb-2.5 pt-1 flex flex-col gap-1.5 bg-surface0/40">
+                    <button
+                      onClick={() => void window.bmad.pty.write({ sessionId, data: "/bmad-generate-wireframe\r" })}
+                      className="w-full py-1.5 text-[10px] border border-surface1 rounded
+                                 text-subtext hover:text-text hover:border-mauve/50 transition-colors"
+                    >
+                      ◻ 生成线框图
+                    </button>
+                    <button
+                      onClick={() => void window.bmad.pty.write({ sessionId, data: "/bmad-save-wireframe\r" })}
+                      className="w-full py-1.5 text-[10px] border border-surface1 rounded
+                                 text-subtext hover:text-text hover:border-green/50 transition-colors"
+                    >
+                      💾 保存线框图
+                    </button>
+                  </div>
+                )}
 
                 {/* 内联输入框（展开时显示） */}
                 {isPending && (
@@ -1080,7 +1133,7 @@ interface IntakeFormProps {
   projectPath: string
   onNameChange: (v: string) => void
   onPathChange: (v: string) => void
-  onStart: (opts: { installCodex: boolean; installGemini: boolean; installAllInOne: boolean }) => void
+  onStart: (opts: { installCodex: boolean; installGemini: boolean; installAllInOne: boolean; installSuperpowers: boolean }) => void
   onBack: () => void
 }
 
@@ -1088,9 +1141,10 @@ function IntakeForm({
   projectName, projectPath,
   onNameChange, onPathChange, onStart, onBack,
 }: IntakeFormProps) {
-  const [installCodex,    setInstallCodex]    = useState(false)
-  const [installGemini,   setInstallGemini]   = useState(false)
-  const [installAllInOne, setInstallAllInOne] = useState(false)
+  const [installCodex,       setInstallCodex]       = useState(false)
+  const [installGemini,      setInstallGemini]      = useState(false)
+  const [installAllInOne,    setInstallAllInOne]    = useState(false)
+  const [installSuperpowers, setInstallSuperpowers] = useState(false)
   const canStart = projectName.trim().length > 0 && projectPath.trim().length > 0
 
   return (
@@ -1208,10 +1262,32 @@ function IntakeForm({
               </span>
             </div>
           </label>
+
+          {/* 分隔线 */}
+          <div className="w-full h-px bg-surface0 my-1" />
+          <p className="text-overlay0 text-xs font-medium">技能增强</p>
+
+          {/* Superpowers skill */}
+          <label className="flex items-start gap-2.5 cursor-pointer group mt-1">
+            <input
+              type="checkbox"
+              checked={installSuperpowers}
+              onChange={(e) => setInstallSuperpowers(e.target.checked)}
+              className="w-4 h-4 mt-0.5 accent-mauve rounded"
+            />
+            <div className="flex flex-col gap-0.5">
+              <span className="text-subtext text-sm group-hover:text-text transition-colors">
+                Superpowers
+              </span>
+              <span className="text-overlay0 text-xs">
+                obra/superpowers · 增强 Claude 能力的 skill 包
+              </span>
+            </div>
+          </label>
         </div>
 
         <button
-          onClick={() => onStart({ installCodex, installGemini, installAllInOne })}
+          onClick={() => onStart({ installCodex, installGemini, installAllInOne, installSuperpowers })}
           disabled={!canStart}
           className="w-full py-3 bg-mauve text-crust rounded-lg font-bold text-sm
                      hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1229,14 +1305,15 @@ function IntakeForm({
 
 interface PlainIntakeFormProps {
   onBack:  () => void
-  onStart: (path: string, opts: { installCodex: boolean; installGemini: boolean; installAllInOne: boolean }) => void
+  onStart: (path: string, opts: { installCodex: boolean; installGemini: boolean; installAllInOne: boolean; installSuperpowers: boolean }) => void
 }
 
 function PlainIntakeForm({ onBack, onStart }: PlainIntakeFormProps) {
-  const [path,           setPath]           = useState("")
-  const [installCodex,   setInstallCodex]   = useState(false)
-  const [installGemini,  setInstallGemini]  = useState(false)
-  const [installAllInOne,setInstallAllInOne] = useState(false)
+  const [path,              setPath]              = useState("")
+  const [installCodex,      setInstallCodex]      = useState(false)
+  const [installGemini,     setInstallGemini]     = useState(false)
+  const [installAllInOne,   setInstallAllInOne]   = useState(false)
+  const [installSuperpowers,setInstallSuperpowers] = useState(false)
   const canStart = path.trim().length > 0
 
   return (
@@ -1259,7 +1336,7 @@ function PlainIntakeForm({ onBack, onStart }: PlainIntakeFormProps) {
                          focus:outline-none focus:border-mauve transition-colors placeholder:text-overlay0 font-mono"
               value={path}
               onChange={(e) => setPath(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && canStart) onStart(path.trim(), { installCodex, installGemini, installAllInOne }) }}
+              onKeyDown={(e) => { if (e.key === "Enter" && canStart) onStart(path.trim(), { installCodex, installGemini, installAllInOne, installSuperpowers }) }}
               placeholder="/Users/你/projects/my-project"
               autoFocus
             />
@@ -1312,10 +1389,22 @@ function PlainIntakeForm({ onBack, onStart }: PlainIntakeFormProps) {
               <span className="text-overlay0 text-xs">配置 Codex+Gemini MCP 服务与 Claude 协作</span>
             </div>
           </label>
+
+          <div className="w-full h-px bg-surface0 my-1" />
+          <p className="text-overlay0 text-xs font-medium">技能增强</p>
+          <label className="flex items-start gap-2.5 cursor-pointer group mt-1">
+            <input type="checkbox" checked={installSuperpowers}
+              onChange={(e) => setInstallSuperpowers(e.target.checked)}
+              className="w-4 h-4 mt-0.5 accent-mauve rounded" />
+            <div className="flex flex-col gap-0.5">
+              <span className="text-subtext text-sm group-hover:text-text transition-colors">Superpowers</span>
+              <span className="text-overlay0 text-xs">obra/superpowers · 增强 Claude 能力的 skill 包</span>
+            </div>
+          </label>
         </div>
 
         <button
-          onClick={() => onStart(path.trim(), { installCodex, installGemini, installAllInOne })}
+          onClick={() => onStart(path.trim(), { installCodex, installGemini, installAllInOne, installSuperpowers })}
           disabled={!canStart}
           className="w-full py-3 bg-surface1 text-text rounded-lg font-bold text-sm
                      hover:bg-surface0 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1352,17 +1441,28 @@ interface ProjectPickerScreenProps {
   onDelete:  (item: StorageProjectItem) => void
   onNew:     () => void
   onNewPlain: () => void
+  onHelp:    () => void
 }
 
-function ProjectPickerScreen({ projects, onResume, onDelete, onNew, onNewPlain }: ProjectPickerScreenProps) {
+function ProjectPickerScreen({ projects, onResume, onDelete, onNew, onNewPlain, onHelp }: ProjectPickerScreenProps) {
   return (
     <div className="min-h-screen bg-base text-text flex flex-col items-center justify-center p-6">
       <div className="w-full max-w-[640px] flex flex-col gap-8">
 
         {/* 标题区 */}
-        <div className="text-center space-y-2">
+        <div className="relative text-center space-y-2">
           <h1 className="text-4xl font-bold text-mauve tracking-tight">云服务流程工具</h1>
           <p className="text-subtext">选择一个现有项目，或开启新的旅程</p>
+          {/* 使用指南按钮 */}
+          <button
+            onClick={onHelp}
+            title="使用指南"
+            className="absolute right-0 top-0 text-overlay0 hover:text-lavender transition-colors text-sm font-semibold
+                       w-7 h-7 rounded-full border border-surface1 hover:border-lavender/50
+                       flex items-center justify-center"
+          >
+            ?
+          </button>
         </div>
 
         {/* 项目列表卡片 */}
@@ -1445,6 +1545,226 @@ function ProjectPickerScreen({ projects, onResume, onDelete, onNew, onNewPlain }
               普通任务
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
+// 帮助/使用指南模态框
+// ============================================================
+
+// 各阶段可用指令配置（command, desc, 可选 note 标注适用条件）
+const STAGE_COMMANDS: {
+  stage: string; emoji: string; color: string; bg: string;
+  desc: string;
+  commands: { cmd: string; desc: string; note?: string }[]
+}[] = [
+  {
+    stage: "任意阶段", emoji: "🌐", color: "text-overlay0", bg: "bg-surface0/30",
+    desc: "随时可用",
+    commands: [
+      { cmd: "/bmad-help",  desc: "查看当前工作流下一步，或提问 BMAD 方法论相关问题" },
+      { cmd: "/resume",     desc: "（Claude 内置）打开历史会话列表，切换/恢复对话" },
+    ],
+  },
+  {
+    stage: "头脑风暴", emoji: "💡", color: "text-yellow", bg: "bg-yellow/5",
+    desc: "探索创意与方向",
+    commands: [
+      { cmd: "/bmad-brainstorming", desc: "启动互动头脑风暴会话，发散思维、探索产品方向" },
+    ],
+  },
+  {
+    stage: "需求分析", emoji: "🔍", color: "text-peach", bg: "bg-peach/5",
+    desc: "BA 澄清与分析需求",
+    commands: [
+      { cmd: "/bmad-bmm-create-product-brief", desc: "通过协作发现流程生成产品简报（Product Brief）" },
+    ],
+  },
+  {
+    stage: "产品规划", emoji: "📝", color: "text-mauve", bg: "bg-mauve/5",
+    desc: "PM 撰写 PRD",
+    commands: [
+      { cmd: "/bmad-bmm-create-prd",     desc: "从零创建产品需求文档（PRD）" },
+      { cmd: "/bmad-generate-wireframe", desc: "根据当前对话内容生成文本线框图（Unicode 框线字符）", note: "侧边栏有快捷按钮" },
+      { cmd: "/bmad-save-wireframe",     desc: "保存线框图到 _bmad-output/planning-artifacts/wireframe.md（Markdown 格式，UX 阶段可自动读取）", note: "侧边栏有快捷按钮" },
+    ],
+  },
+  {
+    stage: "UX/UI 设计", emoji: "🎨", color: "text-pink", bg: "bg-pink/5",
+    desc: "交互设计与视觉规范",
+    commands: [
+      { cmd: "/bmad-bmm-create-ux-design", desc: "制定 UX 交互模式与设计规范文档" },
+    ],
+  },
+  {
+    stage: "架构设计", emoji: "🏗️", color: "text-sapphire", bg: "bg-sapphire/5",
+    desc: "架构师制定技术方案",
+    commands: [
+      { cmd: "/bmad-bmm-create-architecture", desc: "创建技术架构方案设计文档" },
+    ],
+  },
+  {
+    stage: "史诗规划", emoji: "📚", color: "text-teal", bg: "bg-teal/5",
+    desc: "分解故事并验证准备度",
+    commands: [
+      { cmd: "/bmad-create-epics-and-stories",      desc: "将需求拆解为 Epics 和 User Stories" },
+      { cmd: "/bmad-check-implementation-readiness", desc: "检查 PRD / UX / 架构 / Epics 是否完备，验证开发就绪度" },
+    ],
+  },
+  {
+    stage: "编码实现", emoji: "💻", color: "text-green", bg: "bg-green/5",
+    desc: "开发者实现功能代码",
+    commands: [
+      { cmd: "/bmad-sprint-planning",  desc: "从 Epics 生成 Sprint 计划与状态跟踪表" },
+      { cmd: "/bmad-create-story",     desc: "为某个 Story 创建完整上下文文件，供后续实现使用" },
+      { cmd: "/bmad-bmm-dev-story",    desc: "按 Story 规范文件执行代码实现（需指定 story 文件路径）" },
+      { cmd: "/bmad-code-review",      desc: "对当前代码进行对抗性审查，精确定位问题" },
+      { cmd: "/bmad-correct-course",   desc: "在 Sprint 执行中管理重大变更，调整方向" },
+      { cmd: "/bmad-retrospective",    desc: "Epic 结束后复盘，提取经验教训" },
+    ],
+  },
+  {
+    stage: "质量审查", emoji: "✅", color: "text-green", bg: "bg-green/5",
+    desc: "QA 验收与测试",
+    commands: [
+      { cmd: "/bmad-bmm-qa-generate-e2e-tests", desc: "为已有功能生成端到端（E2E）自动化测试用例" },
+    ],
+  },
+]
+
+function HelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-base/80 backdrop-blur-sm p-4">
+      <div className="w-full max-w-2xl bg-mantle rounded-2xl border border-surface0 max-h-[88vh] overflow-y-auto shadow-2xl flex flex-col text-text">
+
+        {/* 顶栏（sticky）*/}
+        <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 bg-mantle/95 backdrop-blur border-b border-surface0">
+          <div>
+            <h2 className="text-lg font-bold tracking-wide">使用指南</h2>
+            <p className="text-overlay0 text-xs mt-0.5">各阶段可用指令一览</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex items-center justify-center w-8 h-8 rounded-full text-subtext
+                       hover:bg-surface0 hover:text-text transition-colors shrink-0"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="p-5 flex flex-col gap-4">
+
+          {/* 阶段指令表 */}
+          {STAGE_COMMANDS.map(({ stage, emoji, color, bg, desc, commands }) => (
+            <section key={stage} className={`rounded-xl border border-surface0/60 overflow-hidden`}>
+              {/* 阶段标题行 */}
+              <div className={`flex items-center gap-2.5 px-4 py-2.5 ${bg} border-b border-surface0/40`}>
+                <span className="text-base">{emoji}</span>
+                <span className={`text-sm font-semibold ${color}`}>{stage}</span>
+                <span className="text-overlay0 text-xs">— {desc}</span>
+              </div>
+              {/* 指令列表 */}
+              <div className="divide-y divide-surface0/40">
+                {commands.map(({ cmd, desc: cmdDesc, note }) => (
+                  <div key={cmd} className="flex items-start gap-3 px-4 py-2.5 hover:bg-surface0/30 transition-colors">
+                    <code className="text-mauve font-mono text-xs font-medium shrink-0 mt-0.5 min-w-0">{cmd}</code>
+                    <div className="flex flex-col gap-0.5 min-w-0">
+                      <span className="text-subtext text-xs leading-relaxed">{cmdDesc}</span>
+                      {note && (
+                        <span className="text-overlay0 text-[10px]">💡 {note}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+
+          {/* 新增功能迭代 */}
+          <section className="rounded-xl border border-surface0/60 overflow-hidden">
+            <div className="flex items-center gap-2.5 px-4 py-2.5 bg-yellow/5 border-b border-surface0/40">
+              <span className="text-base">🔁</span>
+              <span className="text-sm font-semibold text-yellow">新增功能迭代</span>
+              <span className="text-overlay0 text-xs">— 已完成开发/测试后追加功能</span>
+            </div>
+            <div className="divide-y divide-surface0/40">
+              {/* 路径一 */}
+              <div className="px-4 py-3">
+                <p className="text-xs font-semibold text-green mb-2">小功能 / 需求明确 → 直接开发</p>
+                <div className="flex flex-col gap-1.5">
+                  {[
+                    ["史诗规划", "/bmad-create-story",              "为新功能创建 Story 文件"],
+                    ["编码实现", "/bmad-bmm-dev-story",             "按 Story 文件实现代码"],
+                    ["编码实现", "/bmad-code-review",               "审查新增代码"],
+                    ["质量审查", "/bmad-bmm-qa-generate-e2e-tests", "补充 E2E 测试用例"],
+                  ].map(([stage, cmd, desc]) => (
+                    <div key={cmd} className="flex items-center gap-2">
+                      <span className="text-overlay0 text-[10px] w-14 shrink-0">{stage}</span>
+                      <code className="text-mauve font-mono text-xs shrink-0">{cmd}</code>
+                      <span className="text-subtext text-[10px]">— {desc}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* 路径二 */}
+              <div className="px-4 py-3">
+                <p className="text-xs font-semibold text-sapphire mb-2">大功能 / 需求不清晰 → 从规划开始</p>
+                <div className="flex flex-col gap-1.5">
+                  {[
+                    ["产品规划", "/bmad-bmm-create-prd",                   "在现有 PRD 中追加新需求"],
+                    ["架构设计", "/bmad-bmm-create-architecture",           "（可选）影响架构时更新技术方案"],
+                    ["史诗规划", "/bmad-create-epics-and-stories",          "为新功能分解 Epics / Stories"],
+                    ["史诗规划", "/bmad-check-implementation-readiness",    "验证开发就绪度"],
+                    ["编码实现", "/bmad-sprint-planning",                   "生成新 Sprint 计划"],
+                    ["编码实现", "/bmad-create-story",                      "逐条创建 Story 文件"],
+                    ["编码实现", "/bmad-bmm-dev-story",                     "实现"],
+                    ["编码实现", "/bmad-code-review",                       "审查"],
+                    ["质量审查", "/bmad-bmm-qa-generate-e2e-tests",         "补充测试"],
+                  ].map(([stage, cmd, desc]) => (
+                    <div key={cmd} className="flex items-center gap-2">
+                      <span className="text-overlay0 text-[10px] w-14 shrink-0">{stage}</span>
+                      <code className="text-mauve font-mono text-xs shrink-0">{cmd}</code>
+                      <span className="text-subtext text-[10px]">— {desc}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* 附注 */}
+              <div className="px-4 py-2.5 bg-surface0/20">
+                <p className="text-overlay0 text-[10px] leading-relaxed">
+                  💡 在侧边栏点击对应阶段的「重新进入」即可跳回。已有 PRD、架构文档会被自动发现并复用，无需从零开始。<br/>
+                  方向变化时用 <code className="text-mauve">/bmad-correct-course</code>，功能上线后用 <code className="text-mauve">/bmad-retrospective</code> 复盘。
+                </p>
+              </div>
+            </div>
+          </section>
+
+          {/* 使用技巧 */}
+          <section className="rounded-xl border border-surface0/60 overflow-hidden">
+            <div className="flex items-center gap-2.5 px-4 py-2.5 bg-surface0/30 border-b border-surface0/40">
+              <span className="text-base">⚡</span>
+              <span className="text-sm font-semibold text-text">使用技巧</span>
+            </div>
+            <ul className="divide-y divide-surface0/40">
+              {[
+                ["侧边栏阶段切换", "点击各阶段的「开始」可随时跳转，已完成阶段显示「重新进入」"],
+                ["推进流程",       "侧边栏底部「推进下一阶段」按钮，快速进入下一流程"],
+                ["PM 快捷操作",    "PM 阶段侧边栏内置「生成线框图」和「保存线框图」快捷按钮"],
+                ["复制粘贴",       "Cmd+C 复制终端选中内容（无选中时发送中断信号），Cmd+V 粘贴"],
+                ["历史会话",       "顶栏「加载历史」按钮调出 /resume 会话列表，可恢复历史对话"],
+                ["修复命令",       "顶栏「修复命令」按钮重新生成 .claude/commands/ 文件（遇到 Unknown skill 时使用）"],
+              ].map(([title, tip]) => (
+                <li key={title} className="flex items-start gap-3 px-4 py-2.5 hover:bg-surface0/30 transition-colors">
+                  <span className="text-sapphire text-xs font-semibold shrink-0 mt-0.5 w-20">{title}</span>
+                  <span className="text-subtext text-xs leading-relaxed">{tip}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
         </div>
       </div>
     </div>
@@ -1652,7 +1972,8 @@ declare global {
         installClaude:    () => Promise<{ ok: boolean; error?: string }>
         installCodex:     () => Promise<{ ok: boolean; error?: string }>
         installGemini:    () => Promise<{ ok: boolean; error?: string }>
-        installAllInOne:  () => Promise<{ ok: boolean; error?: string }>
+        installAllInOne:    () => Promise<{ ok: boolean; error?: string }>
+        installSuperpowers: (req: { projectPath: string }) => Promise<{ ok: boolean; error?: string }>
       }
       storage: {
         listProjects:  () => Promise<import("@bmad-claude/ipc-contracts").StorageProjectItem[]>

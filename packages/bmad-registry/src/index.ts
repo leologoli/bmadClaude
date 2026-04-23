@@ -29,6 +29,7 @@ interface ClaudeCommand {
   description: string
   loadMd?:     string   // Pattern A：直接加载 .md 工作流文件
   yamlPath?:   string   // Pattern B：通过 workflow.xml 引擎执行 .yaml 配置
+  inline?:     string   // Pattern C：内联指令，直接嵌入命令文件
 }
 
 const CLAUDE_COMMANDS: ClaudeCommand[] = [
@@ -103,6 +104,34 @@ const CLAUDE_COMMANDS: ClaudeCommand[] = [
     loadMd:      "_bmad/bmm/workflows/4-implementation/correct-course/workflow.md",
   },
   {
+    name:        "bmad-generate-wireframe",
+    description: "Generate text-based wireframe based on UX requirements discussed in the conversation. Use when user says 'generate wireframe' or 'create wireframe'.",
+    inline:
+      `根据本次对话中讨论的 UX 需求和设计决策，生成详细的文本线框图。\n` +
+      `\n` +
+      `要求：\n` +
+      `- 使用 Unicode 框线字符（┌─┐│└┘├┤┬┴┼）构建结构\n` +
+      `- 清晰标注所有 UI 组件\n` +
+      `- 包含：导航栏、主内容区、关键控件、交互元素\n` +
+      `- 为重要交互添加简短注释\n` +
+      `- 只输出线框图本体，不附加额外解释`,
+  },
+  {
+    name:        "bmad-save-wireframe",
+    description: "Save the text-based wireframe from this conversation to planning-artifacts/wireframe.md. Use when user says 'save wireframe' or 'save the wireframe'.",
+    inline:
+      `从本次对话中提取最新的文本线框图，以 Markdown 格式保存到 {project-root}/_bmad-output/planning-artifacts/wireframe.md。\n` +
+      `\n` +
+      `步骤：\n` +
+      `1. 若 {project-root}/_bmad-output/planning-artifacts/ 目录不存在则创建\n` +
+      `2. 将线框图内容写入 {project-root}/_bmad-output/planning-artifacts/wireframe.md，格式如下：\n` +
+      `   - 文件顶部写标题 "# 页面线框图"\n` +
+      `   - 每个页面/屏幕用 "## 页面名称" 作为二级标题\n` +
+      `   - 线框图内容包裹在 \`\`\`text 代码块中\n` +
+      `3. 完成后告知用户文件已保存及其完整路径\n` +
+      `4. 若对话中尚未生成线框图，告知用户先执行 /bmad-generate-wireframe`,
+  },
+  {
     name:        "bmad-bmm-qa-generate-e2e-tests",
     description: "Generate end to end automated tests for existing features. Use when user says 'create qa automated tests for [feature]'.",
     yamlPath:    "_bmad/bmm/workflows/qa-generate-e2e-tests/workflow.yaml",
@@ -142,6 +171,11 @@ function buildCommandContent(cmd: ClaudeCommand): string {
       ` READ its entire contents and follow its directions exactly!\n` +
       `\n$ARGUMENTS\n`
     )
+  }
+
+  if (cmd.inline) {
+    // Pattern C：内联指令，直接嵌入命令文件（无需外部 workflow 文件）
+    return header + cmd.inline + "\n\n$ARGUMENTS\n"
   }
 
   if (cmd.yamlPath) {

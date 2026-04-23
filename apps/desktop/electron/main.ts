@@ -76,29 +76,39 @@ let EXTENDED_PATH = [...PLATFORM_PATH_PREFIXES, process.env["PATH"] ?? ""]
   .filter(Boolean)
   .join(path.delimiter)
 
-// 启动时通过 login shell 加载系统 PATH（macOS/Linux 应用启动时不会加载 shell 配置）
+// 启动时通过 login shell 加载完整环境变量（macOS/Linux GUI 应用不继承 shell 配置）
 let SYSTEM_PATH_LOADED = false
 
 async function loadSystemPath(): Promise<void> {
   if (SYSTEM_PATH_LOADED || process.platform === "win32") return
 
   try {
-    // 使用 printenv 避免 shell 启动脚本的输出干扰（如 banner、日志等）
     const shell = process.env["SHELL"] ?? (process.platform === "darwin" ? "/bin/zsh" : "/bin/bash")
-    const { stdout } = await execAsync(`"${shell}" -l -c 'printenv PATH'`, { timeout: 5000 })
-    const systemPath = stdout.trim()
 
-    if (systemPath && systemPath !== process.env["PATH"]) {
-      console.log("[ENV] Loaded system PATH from login shell")
-      process.env["PATH"] = systemPath
-      // 重新构建 EXTENDED_PATH，包含系统 PATH 中的所有路径
-      EXTENDED_PATH = [...PLATFORM_PATH_PREFIXES, systemPath]
-        .filter(Boolean)
-        .join(path.delimiter)
+    // 一次性获取 login shell 的所有环境变量，格式为 KEY=VALUE\n...
+    const { stdout } = await execAsync(`"${shell}" -l -c 'printenv'`, { timeout: 5000 })
+
+    for (const line of stdout.split("\n")) {
+      const eq = line.indexOf("=")
+      if (eq <= 0) continue
+      const key = line.slice(0, eq)
+      const val = line.slice(eq + 1)
+      // PATH 单独处理（需重建 EXTENDED_PATH）；其余变量直接补充（不覆盖已有值）
+      if (key === "PATH") {
+        if (val && val !== process.env["PATH"]) {
+          process.env["PATH"] = val
+          EXTENDED_PATH = [...PLATFORM_PATH_PREFIXES, val].filter(Boolean).join(path.delimiter)
+          console.log("[ENV] Loaded system PATH from login shell")
+        }
+      } else if (!(key in process.env)) {
+        // 仅补充缺失的变量，保留 Electron 自身已有的值
+        process.env[key] = val
+      }
     }
+
     SYSTEM_PATH_LOADED = true
   } catch (err) {
-    console.warn("[ENV] Failed to load system PATH:", err)
+    console.warn("[ENV] Failed to load system env from login shell:", err)
     SYSTEM_PATH_LOADED = true  // 避免重复尝试
   }
 }
@@ -571,6 +581,21 @@ function registerDepHandlers(): void {
   ipcMain.handle(IPC.DEP_INSTALL_CODEX,      async () => npmInstall("@openai/codex"))
   ipcMain.handle(IPC.DEP_INSTALL_GEMINI,     async () => npmInstall("@google/gemini-cli"))
   ipcMain.handle(IPC.DEP_INSTALL_ALL_IN_ONE, async () => installAllInOne())
+
+  // Superpowers 为项目级 skill，安装到目标项目目录
+  ipcMain.handle(IPC.DEP_INSTALL_SUPERPOWERS, async (_e, req: { projectPath: string }) => {
+    try {
+      const env = { ...process.env, PATH: EXTENDED_PATH }
+      const shell = process.env["SHELL"] ?? "/bin/zsh"
+      await execAsync(
+        `"${shell}" -l -c "npx skills add obra/superpowers@using-superpowers -y"`,
+        { env, cwd: req.projectPath, timeout: 120_000 },
+      )
+      return { ok: true }
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
 }
 
 function registerCoreHandlers(): void {
