@@ -256,16 +256,16 @@ const ALL_IN_ONE_MD = `
 `.trim()
 
 // ── 通用 shell 执行（跨平台）──
-async function runLoginShell(cmd: string, timeout = 8000): Promise<{ stdout: string; stderr: string }> {
+async function runLoginShell(cmd: string, timeout = 8000, cwd?: string): Promise<{ stdout: string; stderr: string }> {
   const env = { ...process.env, PATH: EXTENDED_PATH }
   if (process.platform === "win32") {
     // Windows：cmd.exe 执行命令字符串
     const comSpec = process.env["ComSpec"] ?? process.env["COMSPEC"] ?? "cmd.exe"
-    return execAsync(`"${comSpec}" /d /s /c ${JSON.stringify(cmd)}`, { env, timeout })
+    return execAsync(`"${comSpec}" /d /s /c ${JSON.stringify(cmd)}`, { env, timeout, cwd })
   }
   // macOS / Linux：login shell 确保 .zshrc/.zprofile 中的 PATH 生效
   const shell = process.env["SHELL"] ?? "/bin/zsh"
-  return execAsync(`"${shell}" -l -c ${JSON.stringify(cmd)}`, { env, timeout })
+  return execAsync(`"${shell}" -l -c ${JSON.stringify(cmd)}`, { env, timeout, cwd })
 }
 
 // ── 从 ~/.claude.json 读取已注册的 MCP server 名称（-s user 安装写此文件）──
@@ -610,16 +610,28 @@ function registerInstallerHandlers(): void {
     const absPath     = path.resolve(req.projectPath.trim())
     const projectName = req.projectName ?? path.basename(absPath)
 
-    // 目录不存在时自动创建
-    await fs.mkdir(absPath, { recursive: true })
+    try {
+      // 目录不存在时自动创建
+      await fs.mkdir(absPath, { recursive: true })
 
-    // 直接从 GitHub 下载 BMAD-METHOD 工作流文件，无需 npx
-    const result = await bmadInstaller.install(absPath, projectName)
-    return {
-      ok:     result.ok,
-      error:  result.error,
-      stdout: "",
-      stderr: "",
+      // 使用官方安装器下载 _bmad/ 工作流文件并生成 .claude/commands/
+      const { stdout, stderr } = await runLoginShell(
+        "npx bmad-method install --yes --tools claude-code",
+        120_000,
+        absPath,
+      )
+
+      // 写入 bmad-claude 专属配置（中文语言、输出路径等）
+      const result = await bmadInstaller.install(absPath, projectName)
+      return { ok: result.ok, error: result.error, stdout, stderr }
+    } catch (err: unknown) {
+      const e = err as { message?: string; stdout?: string; stderr?: string }
+      return {
+        ok:     false,
+        error:  e.message ?? String(err),
+        stdout: e.stdout  ?? "",
+        stderr: e.stderr  ?? "",
+      }
     }
   })
 

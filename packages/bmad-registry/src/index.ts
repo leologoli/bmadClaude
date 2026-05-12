@@ -9,18 +9,9 @@ import type { BmadRole } from "@bmad-claude/ipc-contracts"
 // 常量
 // ============================================================
 
-const BMAD_REPO       = "bmad-code-org/BMAD-METHOD"
-const BMAD_BRANCH     = "main"
-const CACHE_DIR       = path.join(os.homedir(), ".bmad-claude", "agents")
-const BMAD_CACHE_ROOT = path.join(os.homedir(), ".bmad-claude", "bmad-cache")
-
-// ── 需要从 GitHub 下载并安装到 _bmad/ 的目录前缀 ──
-// src/core/ 包含：agents、tasks（含 workflow.xml）、workflows
-// src/bmm/  包含：agents、workflows（含所有阶段工作流）
-const INSTALL_PREFIXES = [
-  "src/bmm/",
-  "src/core/",
-]
+const BMAD_REPO   = "bmad-code-org/BMAD-METHOD"
+const BMAD_BRANCH = "main"
+const CACHE_DIR   = path.join(os.homedir(), ".bmad-claude", "agents")
 
 // ── Claude Code 命令描述表 ──
 // 命令文件由本地模板生成（非直接下载），因为内容引用 {project-root}/_bmad/ 路径
@@ -198,20 +189,14 @@ function buildCommandContent(cmd: ClaudeCommand): string {
 }
 
 // ============================================================
-// BmadInstaller：从 GitHub 复制文件到项目，无需 npx
+// BmadInstaller：写入 bmad-claude 的本地配置与修复命令
+// （_bmad/ 文件和 .claude/commands/ 由上层 npx bmad-method install 负责）
 // ============================================================
-
-interface GithubFile { path: string; type: string }
-interface GithubTree { sha: string; tree: GithubFile[] }
 
 export class BmadInstaller {
   /**
-   * 将 BMAD-METHOD 工作流文件安装到目标项目：
-   * 1. 获取 GitHub 文件树（1 次 API 请求）
-   * 2. 并行下载 src/core/ + src/bmm/（每批 20 个并发）
-   * 3. 写入 _bmad/ 目录（路径映射：src/core → _bmad/core，src/bmm → _bmad/bmm）
-   * 4. 生成 .claude/commands/bmad-*.md 命令文件（本地模板生成）
-   * 5. 生成配置文件（_bmad/bmm/config.yaml、_bmad/core/config.yaml 等）
+   * npx bmad-method install 完成后调用，写入 bmad-claude 专属配置：
+   * 中文语言设置、输出路径、manifest 等。
    */
   async install(
     projectPath: string,
@@ -219,114 +204,12 @@ export class BmadInstaller {
   ): Promise<{ ok: boolean; error?: string }> {
     try {
       await fs.mkdir(projectPath, { recursive: true })
-
-      // ── 1. 获取完整文件树（单次 API 调用）──
-      const treeData = await this.fetchTree()
-      if (!treeData) return { ok: false, error: "无法连接 GitHub，请检查网络" }
-      const { sha, tree } = treeData
-
-      // ── 2. 筛选需要安装的文件 ──
-      const toInstall = tree
-        .filter(f => f.type === "blob" && INSTALL_PREFIXES.some(p => f.path.startsWith(p)))
-        .map(f => ({
-          src:  f.path,
-          rel:  f.path.slice("src/".length),                              // 缓存内相对路径
-          dest: path.join(projectPath, "_bmad", f.path.slice("src/".length)),
-        }))
-
-      // ── 3. 命中缓存则直接复制；未命中则下载并同步回填缓存 ──
-      const cacheDir = path.join(BMAD_CACHE_ROOT, sha)
-      if (await this.hasCompleteCache(cacheDir)) {
-        console.log(`[BMAD-INSTALL] Cache hit: ${sha}`)
-        await this.copyFromCache(cacheDir, toInstall)
-      } else {
-        console.log(`[BMAD-INSTALL] Downloading ${toInstall.length} files (sha: ${sha})`)
-        // 清除残缺的旧缓存，确保本次写入干净
-        await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => {})
-        await fs.mkdir(cacheDir, { recursive: true })
-        await this.downloadBatch(toInstall, cacheDir)
-        // 所有文件写完后打哨兵，标记缓存完整
-        await fs.writeFile(path.join(cacheDir, ".complete"), sha, "utf-8")
-          .catch(e => console.warn("[BMAD-INSTALL] Cache sentinel write failed:", e))
-      }
-
-      // ── 4. 生成 .claude/commands/ 命令文件（本地模板，无需网络）──
-      const commandsDir = path.join(projectPath, ".claude", "commands")
-      await fs.mkdir(commandsDir, { recursive: true })
-
-      await Promise.all(CLAUDE_COMMANDS.map(async (cmd) => {
-        const content = buildCommandContent(cmd)
-        await fs.writeFile(path.join(commandsDir, `${cmd.name}.md`), content, "utf-8")
-        console.log(`[BMAD-INSTALL] Command: ${cmd.name}`)
-      }))
-
-      // ── 5. 生成配置文件 ──
       await this.writeConfigs(projectPath, projectName)
-
-      console.log("[BMAD-INSTALL] Done")
+      console.log("[BMAD-INSTALL] Configs written")
       return { ok: true }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       return { ok: false, error: msg }
-    }
-  }
-
-  // ── 获取仓库文件树（单次 API 请求）──
-  private async fetchTree(): Promise<GithubTree | null> {
-    const url = `https://api.github.com/repos/${BMAD_REPO}/git/trees/${BMAD_BRANCH}?recursive=1`
-    const raw  = await httpsGet(url)
-    if (!raw) return null
-    try {
-      const data = JSON.parse(raw) as { sha?: string; tree?: GithubFile[] }
-      if (typeof data.sha !== "string" || !Array.isArray(data.tree)) return null
-      return { sha: data.sha, tree: data.tree }
-    } catch { return null }
-  }
-
-  // ── 批量并发下载；同步写入 cacheDir（传 null 则不缓存）──
-  private async downloadBatch(
-    files: Array<{ src: string; rel: string; dest: string }>,
-    cacheDir: string | null = null,
-    concurrency = 20,
-  ): Promise<void> {
-    for (let i = 0; i < files.length; i += concurrency) {
-      const batch = files.slice(i, i + concurrency)
-      await Promise.all(batch.map(async ({ src, rel, dest }) => {
-        const url     = `https://raw.githubusercontent.com/${BMAD_REPO}/${BMAD_BRANCH}/${src}`
-        const content = await httpsGet(url)
-        if (content !== null) {
-          await fs.mkdir(path.dirname(dest), { recursive: true })
-          await fs.writeFile(dest, content, "utf-8")
-          // 下载成功时同步写入缓存（与 dest 同内容，避免回拷遗漏失败文件）
-          if (cacheDir) {
-            const cacheDest = path.join(cacheDir, rel)
-            await fs.mkdir(path.dirname(cacheDest), { recursive: true })
-            await fs.writeFile(cacheDest, content, "utf-8")
-          }
-        }
-      }))
-    }
-  }
-
-  // ── 缓存完整性检查（以 .complete 哨兵文件为准）──
-  private async hasCompleteCache(cacheDir: string): Promise<boolean> {
-    try { await fs.access(path.join(cacheDir, ".complete")); return true }
-    catch { return false }
-  }
-
-  // ── 从缓存复制到项目目录 ──
-  private async copyFromCache(
-    cacheDir: string,
-    files: Array<{ rel: string; dest: string }>,
-    concurrency = 20,
-  ): Promise<void> {
-    for (let i = 0; i < files.length; i += concurrency) {
-      const batch = files.slice(i, i + concurrency)
-      await Promise.all(batch.map(async ({ rel, dest }) => {
-        const src = path.join(cacheDir, rel)
-        await fs.mkdir(path.dirname(dest), { recursive: true })
-        await fs.copyFile(src, dest)
-      }))
     }
   }
 
@@ -338,8 +221,11 @@ export class BmadInstaller {
     const docsPath = "_bmad-output"
     const now = new Date().toISOString()
 
+    // 以下三个配置由 bmad-claude 强制覆写，确保中文语言设置和输出路径生效
+    // （npx bmad-method install 可能生成英文默认值，此处覆盖）
+
     // _bmad/bmm/config.yaml
-    await this.writeOnce(
+    await this.writeForce(
       path.join(projectPath, "_bmad", "bmm", "config.yaml"),
       [
         `# BMM Module Configuration`,
@@ -359,7 +245,7 @@ export class BmadInstaller {
     )
 
     // _bmad/core/config.yaml
-    await this.writeOnce(
+    await this.writeForce(
       path.join(projectPath, "_bmad", "core", "config.yaml"),
       [
         `# CORE Module Configuration`,
@@ -372,7 +258,7 @@ export class BmadInstaller {
     )
 
     // _bmad/_memory/config.yaml
-    await this.writeOnce(
+    await this.writeForce(
       path.join(projectPath, "_bmad", "_memory", "config.yaml"),
       [
         `# _MEMORY Module Configuration`,
@@ -454,6 +340,12 @@ export class BmadInstaller {
     } catch {
       await fs.writeFile(filePath, content, "utf-8")
     }
+  }
+
+  // ── 强制写入，覆盖已有文件（用于 bmad-claude 专属配置覆盖 npx 默认值）──
+  private async writeForce(filePath: string, content: string): Promise<void> {
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    await fs.writeFile(filePath, content, "utf-8")
   }
 }
 
